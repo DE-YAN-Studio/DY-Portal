@@ -209,6 +209,11 @@ Kiosk mode hides the window chrome, so these are the way out:
 | `Cmd/Ctrl+Shift+R` | Reload the portal |
 | `Cmd/Ctrl+Shift+I` | Toggle DevTools |
 
+They need the portal window focused and its renderer alive. If it is wedged hard
+enough not to take input, kill the process instead — the supervisor will bring it
+back. To stop it and have it *stay* stopped, see
+[Stopping it on purpose](#stopping-it-on-purpose).
+
 ## Launch at Login (unattended displays)
 
 The app recovers on its own from renderer crashes, hangs, network loss, and
@@ -257,6 +262,33 @@ immediately, making the repeat a no-op; if it died, the repeat brings it back.
 
 ```
 schtasks /query /tn "DY Portal"
+```
+
+### Stopping it on purpose
+
+The two supervisors treat a deliberate quit differently, so the procedure is not
+the same on both.
+
+**macOS.** `Cmd+Shift+Q` exits cleanly and stays stopped — `KeepAlive` is set to
+restart only on abnormal exit. But `pkill` *is* an abnormal exit, so launchd
+brings it straight back. To stop it for maintenance, unload the agent first:
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.deyan.portal.plist
+pkill -f "DY Portal"
+# re-enable
+launchctl load -w ~/Library/LaunchAgents/com.deyan.portal.plist
+```
+
+**Windows.** Task Scheduler cannot distinguish a deliberate quit from a crash —
+it simply retries every 5 minutes — so `Ctrl+Shift+Q` alone is undone within 5
+minutes. Disable the task first:
+
+```
+schtasks /change /tn "DY Portal" /disable
+taskkill /IM "DY Portal.exe" /F
+rem re-enable
+schtasks /change /tn "DY Portal" /enable
 ```
 
 ### Verifying it works
