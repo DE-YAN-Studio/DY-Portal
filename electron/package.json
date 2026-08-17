@@ -2,6 +2,8 @@
   "name": "dy-portal-desktop",
   "version": "1.0.0",
   "description": "Kiosk desktop app for the DY Portal video link",
+  "author": "DE-YAN Studio",
+  "license": "MIT",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -24,10 +26,16 @@
     "mac": {
       "category": "public.app-category.video",
       "target": [
-        "dmg",
-        "zip"
+        {
+          "target": "dmg",
+          "arch": ["arm64", "x64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["arm64", "x64"]
+        }
       ],
-      "hardenedRuntime": true,
+      "identity": null,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {

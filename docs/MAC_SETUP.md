@@ -6,19 +6,51 @@ display, using the Electron desktop app.
 ## Prerequisites
 
 - Mac Mini with macOS
-- The `DY Portal.app` build (see the README for `npm run dist:mac`)
+- A Mac with Node.js to build the app (can be the Mac Mini itself)
 - Network connection
 - Portal password (get from admin)
 
-## Step 1: Install the app
+## Step 1: Build the app
+
+The build must run **on a Mac** — electron-builder cannot produce macOS
+artifacts from Windows or Linux.
+
+```bash
+cd electron
+npm install
+npm run dist:mac
+```
+
+Output lands in `electron/dist/`: a `.dmg` and `.zip` for both `arm64` (Apple
+Silicon) and `x64` (Intel). Match the architecture to the Mac Mini — `uname -m`
+prints `arm64` or `x86_64`.
+
+## Step 2: Install it
 
 Copy `DY Portal.app` into `/Applications`.
 
-If the build is unsigned, macOS will refuse to open it the first time. Open it
-once from Finder with **right-click > Open**, then confirm in **System Settings >
-Privacy & Security**. A signed build skips this.
+The build is **unsigned** (ad-hoc signed only), so macOS quarantines it and
+refuses the first launch. Clear the quarantine flag:
 
-## Step 2: Configure the machine's office
+```bash
+xattr -dr com.apple.quarantine "/Applications/DY Portal.app"
+```
+
+Alternatively, launch it once from Finder and approve it under **System Settings
+> Privacy & Security**, where it appears as blocked.
+
+Transferring the app by USB or `scp` rather than downloading it often avoids the
+quarantine flag being set at all.
+
+> **Unsigned builds and permissions.** macOS ties camera and microphone grants to
+> an app's code signature. Without a stable Developer ID, a rebuilt app can be
+> treated as a different app, and macOS will prompt for camera and mic again —
+> on a kiosk with nobody watching, that means the portal comes up black behind a
+> dialog. After **every** app update, verify the portal still has video, and
+> re-approve under Privacy & Security if not. Signing removes this failure mode;
+> see the README.
+
+## Step 3: Configure the machine's office
 
 Create `~/Library/Application Support/DY Portal/portal.config.json`:
 
@@ -37,7 +69,7 @@ On the Serbia machine, swap `localOffice` and `remoteOffice`.
 Keeping the config here rather than inside the bundle means the password is not
 baked into a shipped binary, and one build serves both offices.
 
-## Step 3: Grant camera and microphone access
+## Step 4: Grant camera and microphone access
 
 Launch the app once from Finder. macOS prompts for camera and microphone on first
 run — accept both. The prompt appears only once; if it is missed or refused, the
@@ -47,7 +79,7 @@ Camera** / **Microphone**, enabling **DY Portal**.
 The app grants the *web page* its own permissions, but it cannot bypass this
 OS-level gate.
 
-## Step 4: Enable launch at login
+## Step 5: Enable launch at login
 
 ```bash
 mkdir -p /Users/Shared/portal          # log destination
@@ -66,7 +98,7 @@ launchctl list | grep com.deyan.portal
 tail -f /Users/Shared/portal/portal.log
 ```
 
-## Step 5: Configure macOS for kiosk use
+## Step 6: Configure macOS for kiosk use
 
 ### Disable sleep
 
@@ -113,8 +145,10 @@ exit, so these do not fight each other.
 
 ### Portal is black, or shows a camera error
 
-Check camera permissions (Step 3), that no other app holds the camera, and
-reseat external cameras. The log names the exact failure:
+Check camera permissions (Step 4), that no other app holds the camera, and
+reseat external cameras. This is also the first thing to check after an app
+update, since an unsigned rebuild can reset the grant. The log names the exact
+failure:
 
 ```bash
 tail -50 /Users/Shared/portal/portal.log

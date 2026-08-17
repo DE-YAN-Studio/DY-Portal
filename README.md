@@ -171,9 +171,33 @@ instead of the bundle, so the password isn't baked into a shipped binary:
 - macOS: `~/Library/Application Support/DY Portal/portal.config.json`
 - Windows: `%APPDATA%\DY Portal\portal.config.json`
 
-macOS builds need the camera/microphone entitlements in
-`electron/build/entitlements.mac.plist` (already configured). An unsigned build
-will be blocked by Gatekeeper; sign it or approve it in System Settings.
+macOS builds must run **on a Mac** — electron-builder cannot produce macOS
+artifacts from Windows or Linux. Full display setup is in
+[docs/MAC_SETUP.md](docs/MAC_SETUP.md).
+
+### Code signing
+
+The macOS build is currently **unsigned** (`"identity": null` — ad-hoc only,
+which is the minimum Apple Silicon needs to launch at all). That has two costs:
+
+1. Gatekeeper blocks the first launch until you clear quarantine with
+   `xattr -dr com.apple.quarantine "/Applications/DY Portal.app"` or approve it
+   in System Settings. One-time, per machine.
+2. **macOS ties camera and microphone grants to the code signature.** Without a
+   stable Developer ID, a rebuild can read as a different app and re-prompt for
+   both — and an unattended kiosk has nobody to click Allow, so the portal comes
+   up black. Re-check video after every app update.
+
+To sign later: an Apple Developer account and a Developer ID Application
+certificate, then drop `"identity": null`, add `"hardenedRuntime": true` and
+`"notarize": true`, and set `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and
+`APPLE_TEAM_ID` at build time. The entitlements in
+`electron/build/entitlements.mac.plist` already declare the camera and
+microphone access notarization requires, so they are left in place.
+
+Windows installers are unsigned too, which shows a one-time SmartScreen warning.
+There is no permission-persistence equivalent on Windows, so this matters much
+less.
 
 ### Kiosk shortcuts
 
