@@ -1,0 +1,44 @@
+{
+  "name": "dy-portal-desktop",
+  "version": "1.0.0",
+  "description": "Kiosk desktop app for the DY Portal video link",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^43.4.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "studio.deyan.portal",
+    "productName": "DY Portal",
+    "files": [
+      "main.js",
+      "offline.html",
+      "portal.config.json"
+    ],
+    "mac": {
+      "category": "public.app-category.video",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSCameraUsageDescription": "The portal shows this office to the remote office.",
+        "NSMicrophoneUsageDescription": "The portal carries this office's audio to the remote office."
+      }
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    }
+  }
+}

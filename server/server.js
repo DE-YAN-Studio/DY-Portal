@@ -8,11 +8,45 @@ const app = express();
 const PORT = process.env.PORT || 9000;
 const PASSWORD = process.env.PORTAL_PASSWORD || 'portal123';
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+const SESSION_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
 
-const sessions = new Set();
+if (!process.env.SESSION_SECRET) {
+  console.warn('SESSION_SECRET is not set - using a random value. Sessions will not survive a restart.');
+}
+
+// Render terminates TLS at its proxy, so req.secure needs the forwarded header.
+app.set('trust proxy', 1);
 
 app.use(express.json());
 app.use(cookieParser());
+
+// Sessions are stateless: the cookie carries its own issue time plus an HMAC
+// over that time. Nothing is held in memory, so a redeploy or crash does not
+// sign the kiosks out.
+function issueSession() {
+  const issuedAt = Date.now().toString();
+  return `${issuedAt}.${signSession(issuedAt)}`;
+}
+
+function signSession(issuedAt) {
+  return crypto.createHmac('sha256', SESSION_SECRET).update(issuedAt).digest('hex');
+}
+
+function verifySession(cookie) {
+  if (typeof cookie !== 'string') return false;
+
+  const [issuedAt, signature] = cookie.split('.');
+  if (!issuedAt || !signature) return false;
+
+  const expected = signSession(issuedAt);
+  const given = Buffer.from(signature, 'hex');
+  const want = Buffer.from(expected, 'hex');
+  if (given.length !== want.length) return false;
+  if (!crypto.timingSafeEqual(given, want)) return false;
+
+  const age = Date.now() - Number(issuedAt);
+  return Number.isFinite(age) && age >= 0 && age < SESSION_MAX_AGE;
+}
 
 const server = app.listen(PORT, () => {
   console.log(`Portal server listening on port ${PORT}`);
@@ -26,8 +60,7 @@ const peerServer = ExpressPeerServer(server, {
 app.use('/peerjs', peerServer);
 
 function requireAuth(req, res, next) {
-  const sessionId = req.cookies.session;
-  if (sessionId && sessions.has(sessionId)) {
+  if (verifySession(req.cookies.session)) {
     return next();
   }
   res.redirect('/login');
@@ -39,10 +72,13 @@ app.get('/login', (req, res) => {
 
 app.post('/api/login', (req, res) => {
   const { password } = req.body;
-  if (password === PASSWORD) {
-    const sessionId = crypto.randomBytes(32).toString('hex');
-    sessions.add(sessionId);
-    res.cookie('session', sessionId, { httpOnly: true, maxAge: 7 * 24 * 60 * 60 * 1000 });
+  if (typeof password === 'string' && password === PASSWORD) {
+    res.cookie('session', issueSession(), {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: req.secure,
+      maxAge: SESSION_MAX_AGE
+    });
     res.json({ success: true });
   } else {
     res.status(401).json({ success: false, error: 'Invalid password' });
@@ -50,8 +86,6 @@ app.post('/api/login', (req, res) => {
 });
 
 app.post('/api/logout', (req, res) => {
-  const sessionId = req.cookies.session;
-  if (sessionId) sessions.delete(sessionId);
   res.clearCookie('session');
   res.json({ success: true });
 });
@@ -59,8 +93,7 @@ app.post('/api/logout', (req, res) => {
 app.use('/client', requireAuth, express.static(path.join(__dirname, '../client')));
 
 app.get('/', (req, res) => {
-  const sessionId = req.cookies.session;
-  if (sessionId && sessions.has(sessionId)) {
+  if (verifySession(req.cookies.session)) {
     res.redirect('/client/index.html');
   } else {
     res.redirect('/login');

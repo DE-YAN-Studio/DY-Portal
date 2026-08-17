@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Launches the portal at login and restarts it if it dies.
+
+  This must be a LaunchAgent in ~/Library/LaunchAgents, not a LaunchDaemon:
+  daemons run outside the GUI login session and cannot reach the camera,
+  microphone, or a display.
+
+  Install:
+    cp com.deyan.portal.plist ~/Library/LaunchAgents/
+    launchctl load -w ~/Library/LaunchAgents/com.deyan.portal.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.deyan.portal</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <!-- The executable inside the bundle, not `open` - launchd has to
+             supervise the actual process to notice when it exits. -->
+        <string>/Applications/DY Portal.app/Contents/MacOS/DY Portal</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart only on abnormal exit. A plain `true` here would relaunch after
+         a deliberate Cmd+Shift+Q too, making the escape hatch useless. -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Floor on respawn rate, so a boot-loop backs off instead of spinning. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/Shared/portal/portal.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/Shared/portal/portal.log</string>
+</dict>
+</plist>

@@ -121,13 +121,13 @@ async function getLocalStream(facingMode = 'user') {
 
     return localStream;
   } catch (err) {
-    console.error('getUserMedia error:', err);
+    console.error(`getUserMedia error: ${err.name}: ${err.message}`);
     throw err;
   }
 }
 
 function handleCameraError(err) {
-  console.error('Camera error:', err);
+  console.error(`Camera error: ${err.name}: ${err.message}`);
   const errorEl = document.getElementById('camera-error');
   const messageEl = document.getElementById('error-message');
 
@@ -174,7 +174,7 @@ function connectToPeerServer() {
     host: config.PEER_SERVER_HOST,
     port: config.PEER_SERVER_PORT,
     path: config.PEER_SERVER_PATH,
-    secure: config.PEER_SERVER_HOST !== 'localhost'
+    secure: config.PEER_SERVER_SECURE
   });
 
   peer.on('open', (id) => {
@@ -296,7 +296,11 @@ function handleRemoteStream(stream) {
   remoteVideo.playsInline = true;
   remoteVideo.muted = false;
   remoteVideo.play().catch(err => {
-    console.error('Error playing remote video:', err);
+    // AbortError is expected when a second stream arrives and replaces the
+    // source before the pending play() settles; the newer stream plays instead.
+    if (err.name !== 'AbortError') {
+      console.error(`Error playing remote video: ${err.name}: ${err.message}`);
+    }
   });
 
   document.getElementById('offline-overlay').classList.add('hidden');

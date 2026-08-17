@@ -3,3 +3,7 @@ node_modules/
 .DS_Store
 .env
 keys/
+
+# Holds the portal password for a specific machine
+electron/portal.config.json
+electron/dist/

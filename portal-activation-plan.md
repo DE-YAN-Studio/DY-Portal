@@ -1,5 +1,10 @@
 # Portal Activation — Implementation Plan for Claude Code
 
+> **Superseded.** This is the original build plan, kept for history. The
+> signaling server now runs on Render rather than an Oracle Cloud VM with PM2,
+> and displays run the Electron app in `electron/` rather than Chromium kiosk
+> mode. See the README for current setup.
+
 ## Project Overview
 
 Build an always-on, two-way video portal between two offices using WebRTC for peer-to-peer media and a self-hosted PeerJS server for signaling. The signaling server runs on an Oracle Cloud free-tier VM managed by PM2. The client runs as a local HTML file in Chromium kiosk mode on a dedicated machine at each office.

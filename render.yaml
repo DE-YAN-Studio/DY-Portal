@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: dy-portal
+    runtime: node
+    plan: starter
+    region: ohio
+    branch: master
+    # Both offices must land on the same process: PeerJS keeps its peer registry
+    # in memory, so a second instance would split the two offices apart and they
+    # would never discover each other.
+    numInstances: 1
+    # Delegates to the root package.json, which installs into server/. The
+    # default `npm install` would run at the root and miss the server's deps.
+    buildCommand: npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      # Rotating this signs every office out, so it is generated once and kept.
+      - key: SESSION_SECRET
+        generateValue: true
+      # Set in the Render dashboard - deliberately not stored in the repo.
+      - key: PORTAL_PASSWORD
+        sync: false

@@ -1,98 +1,74 @@
 # Mac Mini Portal Setup Guide
 
-Complete setup guide for running the Portal on a Mac Mini as a dedicated always-on display.
+Complete setup for running the Portal on a Mac Mini as a dedicated always-on
+display, using the Electron desktop app.
 
 ## Prerequisites
 
 - Mac Mini with macOS
-- Google Chrome installed
+- The `DY Portal.app` build (see the README for `npm run dist:mac`)
 - Network connection
 - Portal password (get from admin)
 
-## Step 1: Install Google Chrome
+## Step 1: Install the app
 
-If Chrome isn't installed:
+Copy `DY Portal.app` into `/Applications`.
 
-1. Download from https://www.google.com/chrome/
-2. Drag to Applications folder
-3. Open once to accept permissions
+If the build is unsigned, macOS will refuse to open it the first time. Open it
+once from Finder with **right-click > Open**, then confirm in **System Settings >
+Privacy & Security**. A signed build skips this.
 
-## Step 2: Download Portal Scripts
+## Step 2: Configure the machine's office
 
-Open Terminal (Cmd + Space, type "Terminal") and run:
+Create `~/Library/Application Support/DY Portal/portal.config.json`:
 
-```bash
-# Create portal directory
-sudo mkdir -p /Users/Shared/portal
-
-# Download scripts directly to portal directory
-cd /Users/Shared/portal
-sudo curl -O https://raw.githubusercontent.com/DE-YAN-Studio/DY-Portal/master/scripts/start-kiosk-mac.sh
-sudo curl -O https://raw.githubusercontent.com/DE-YAN-Studio/DY-Portal/master/scripts/watchdog-mac.sh
-sudo chmod +x /Users/Shared/portal/*.sh
-
-# Create Chrome data directory with proper permissions
-sudo mkdir -p /Users/Shared/portal/chrome-data
-sudo chmod 777 /Users/Shared/portal/chrome-data
+```json
+{
+  "portalUrl": "https://dy-portal.onrender.com",
+  "password": "the-portal-password",
+  "localOffice": "office-ny",
+  "remoteOffice": "office-serbia",
+  "kiosk": true
+}
 ```
 
-## Step 3: Grant Chrome Camera/Microphone Access
+On the Serbia machine, swap `localOffice` and `remoteOffice`.
 
-1. Open **System Settings** > **Privacy & Security**
-2. Click **Camera** > Enable for **Google Chrome**
-3. Click **Microphone** > Enable for **Google Chrome**
+Keeping the config here rather than inside the bundle means the password is not
+baked into a shipped binary, and one build serves both offices.
 
-## Step 4: First Run (Manual Login)
+## Step 3: Grant camera and microphone access
 
-Run the kiosk script manually to log in and select your office:
+Launch the app once from Finder. macOS prompts for camera and microphone on first
+run — accept both. The prompt appears only once; if it is missed or refused, the
+portal comes up black. Fix it in **System Settings > Privacy & Security >
+Camera** / **Microphone**, enabling **DY Portal**.
 
-```bash
-/Users/Shared/portal/start-kiosk-mac.sh
-```
+The app grants the *web page* its own permissions, but it cannot bypass this
+OS-level gate.
 
-Chrome will open in kiosk mode. You'll need to:
-
-1. Enter the portal password
-2. Select your office (New York or Serbia)
-
-These are saved as cookies and won't be asked again.
-
-**To exit kiosk mode:** Press `Cmd + Q` or `Cmd + W`
-
-## Step 5: Enable Auto-Start on Boot
-
-### Option A: Login Items (Recommended)
-
-1. Open **Automator** (Cmd + Space, type "Automator")
-2. Click **New Document**
-3. Select **Application** and click **Choose**
-4. In the search bar (top left), search for "Run Shell Script"
-5. Drag **Run Shell Script** to the workflow area on the right
-6. Replace the default text with: `/Users/Shared/portal/watchdog-mac.sh`
-7. Go to **File > Save** (Cmd + S)
-8. Name it `Portal Watchdog` and save to your **Applications** folder
-9. Open **System Settings** > **General** > **Login Items**
-10. Click **+** under "Open at Login"
-11. Navigate to **Applications** and select `Portal Watchdog.app`
-
-### Option B: LaunchAgent
+## Step 4: Enable launch at login
 
 ```bash
-# Create the plist (copy content from scripts/com.portal.watchdog.plist)
-nano ~/Library/LaunchAgents/com.portal.watchdog.plist
-
-# Load it
-launchctl load ~/Library/LaunchAgents/com.portal.watchdog.plist
+mkdir -p /Users/Shared/portal          # log destination
+cp scripts/com.deyan.portal.plist ~/Library/LaunchAgents/
+launchctl load -w ~/Library/LaunchAgents/com.deyan.portal.plist
 ```
 
-The watchdog will now:
-- Start automatically on boot
-- Monitor Chrome every 30 seconds
-- Restart Chrome if it crashes
+This starts the portal at login and restarts it if the process dies. It must be a
+LaunchAgent in `~/Library/LaunchAgents`, not a LaunchDaemon — daemons run outside
+the GUI login session and cannot reach the camera, microphone, or a display.
 
-## Step 6: Configure Mac for Kiosk Use
+Verify:
 
-### Disable Sleep
+```bash
+launchctl list | grep com.deyan.portal
+tail -f /Users/Shared/portal/portal.log
+```
+
+## Step 5: Configure macOS for kiosk use
+
+### Disable sleep
 
 1. **System Settings** > **Displays** > **Advanced...**
 2. Turn **on** "Prevent automatic sleeping when the display is off"
@@ -100,88 +76,92 @@ The watchdog will now:
 4. Set "Turn display off when inactive" to **Never**
 5. Set "Require password after screen saver" to **Never**
 
-### Auto-Login (Optional)
+The app also blocks display sleep programmatically, but the lock screen would
+still cover the portal, so both are needed.
+
+### Auto-login
+
+Required for an unattended machine — the LaunchAgent only runs once a user is
+logged in, so without this a reboot stops at the login window.
 
 1. **System Settings** > **Users & Groups**
-2. Click **Login Options** (at bottom)
+2. Click **Login Options**
 3. Set "Automatic login" to your user account
 
-### Hide Menu Bar and Dock (Optional)
+### Hide menu bar and Dock
 
-1. **System Settings** > **Desktop & Dock**
-2. Enable "Automatically hide and show the Dock"
-3. **System Settings** > **Control Center**
-4. Set "Automatically hide and show the menu bar" to **Always**
+1. **System Settings** > **Desktop & Dock** > enable "Automatically hide and show the Dock"
+2. **System Settings** > **Control Center** > set "Automatically hide and show the menu bar" to **Always**
 
-### Disable Notifications
+### Disable notifications
 
-1. **System Settings** > **Notifications**
-2. Turn off notifications for all apps, or enable **Do Not Disturb**
+**System Settings** > **Notifications** — turn off notifications for all apps, or
+enable **Do Not Disturb**, so nothing pops over the portal.
+
+## Kiosk shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Cmd+Shift+Q` | Quit |
+| `Cmd+Shift+R` | Reload the portal |
+| `Cmd+Shift+I` | Toggle DevTools |
+
+A deliberate quit stays quit — the LaunchAgent restarts the app only on abnormal
+exit, so these do not fight each other.
 
 ## Troubleshooting
 
-### Chrome won't start
+### Portal is black, or shows a camera error
 
-Check if Chrome is installed:
+Check camera permissions (Step 3), that no other app holds the camera, and
+reseat external cameras. The log names the exact failure:
+
 ```bash
-ls "/Applications/Google Chrome.app"
+tail -50 /Users/Shared/portal/portal.log
 ```
 
-### Camera not working
-
-1. Check camera permissions in System Settings
-2. Make sure no other app is using the camera
-3. Try unplugging and replugging external cameras
-
-### Portal stuck on "Calling..."
+### Stuck on "Calling…"
 
 1. Check internet connection
 2. Verify the other office is online
-3. Check https://dy-portal.duckdns.org/health for connected peers
+3. Check https://dy-portal.onrender.com/health for connected peers
 
-### Stop the watchdog
+If both offices appear at `/health` but no video arrives, it is likely NAT
+traversal — there is no TURN relay configured. See the README.
+
+### App does not come back after a crash or reboot
 
 ```bash
-# If using LaunchAgent:
-launchctl unload ~/Library/LaunchAgents/com.portal.watchdog.plist
-
-# If using Login Items, remove from System Settings > General > Login Items
-# Then kill the running process:
-pkill -f watchdog-mac.sh
+launchctl list | grep com.deyan.portal      # is the agent loaded?
+launchctl unload ~/Library/LaunchAgents/com.deyan.portal.plist
+launchctl load -w ~/Library/LaunchAgents/com.deyan.portal.plist
 ```
 
-### Check watchdog logs
+Confirm auto-login is enabled — without it, a reboot waits at the login window
+and the agent never runs.
+
+### Reset login and office selection
 
 ```bash
-cat /Users/Shared/portal/watchdog-mac.log
+rm -rf ~/Library/Application\ Support/DY\ Portal/{Cookies,Cookies-journal}
 ```
 
-### Restart everything
+The config file in that directory is what pins the office; leave it in place
+unless you are reassigning the machine.
+
+### Stop the portal for maintenance
 
 ```bash
-# Stop watchdog
-pkill -f watchdog-mac.sh
-
-# Kill Chrome
-pkill -f "Google Chrome"
-
-# Restart watchdog (will relaunch Chrome)
-/Users/Shared/portal/watchdog-mac.sh &
-```
-
-### Clear saved cookies (reset login/office)
-
-```bash
-# Quit Chrome first, then:
-sudo rm -rf /Users/Shared/portal/chrome-data
+launchctl unload ~/Library/LaunchAgents/com.deyan.portal.plist
+pkill -f "DY Portal"
 ```
 
 ## Quick Reference
 
 | Action | Command |
 |--------|---------|
-| Start kiosk manually | `/Users/Shared/portal/start-kiosk-mac.sh` |
-| Stop watchdog | `pkill -f watchdog-mac.sh` |
-| Start watchdog manually | `/Users/Shared/portal/watchdog-mac.sh &` |
-| View logs | `cat /Users/Shared/portal/watchdog-mac.log` |
-| Exit kiosk | `Cmd + Q` |
+| Start manually | `open "/Applications/DY Portal.app"` |
+| Stop it staying stopped | `launchctl unload ~/Library/LaunchAgents/com.deyan.portal.plist && pkill -f "DY Portal"` |
+| Re-enable | `launchctl load -w ~/Library/LaunchAgents/com.deyan.portal.plist` |
+| View logs | `tail -f /Users/Shared/portal/portal.log` |
+| Exit kiosk | `Cmd+Shift+Q` |

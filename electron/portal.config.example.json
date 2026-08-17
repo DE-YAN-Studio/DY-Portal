@@ -1,0 +1,7 @@
+{
+  "portalUrl": "https://dy-portal.onrender.com",
+  "password": "the-PORTAL_PASSWORD-set-in-render",
+  "localOffice": "office-ny",
+  "remoteOffice": "office-serbia",
+  "kiosk": true
+}
