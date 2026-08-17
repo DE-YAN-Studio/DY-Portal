@@ -8,8 +8,8 @@ const fs = require('fs');
 // renderer crash, a hang, a lost window, or a network drop.
 //
 // What it cannot do is restart itself once the process is gone, or start after a
-// reboot. That is left to the OS supervisor - see scripts/com.deyan.portal.plist
-// (macOS) and scripts/dy-portal-task.xml (Windows).
+// reboot. That is left to the OS supervisor - see scripts/com.deyan.portal.plist,
+// the LaunchAgent that runs on the display machines.
 
 const DEFAULTS = {
   portalUrl: 'https://dy-portal.onrender.com',

@@ -107,8 +107,7 @@ portal/
 │   ├── offline.html        # Shown while reconnecting
 │   └── portal.config.example.json
 ├── scripts/
-│   ├── com.deyan.portal.plist  # macOS launch-at-login + restart
-│   └── dy-portal-task.xml      # Windows launch-at-login + restart
+│   └── com.deyan.portal.plist  # macOS launch-at-login + restart
 └── README.md
 ```
 
@@ -246,32 +245,16 @@ launchctl list | grep com.deyan.portal
 tail -f /Users/Shared/portal/portal.log
 ```
 
-### Windows
-
-Edit the `<Command>` path in `scripts/dy-portal-task.xml` if you did not install
-to the default per-user location, then, in an Administrator prompt:
-
-```
-schtasks /create /tn "DY Portal" /xml scripts\dy-portal-task.xml
-```
-
-There is no launchd equivalent here, so the task leans on the app's
-single-instance lock: it tries to start the portal at logon and every 5 minutes
-after. If the portal is already running the new copy sees the lock and exits
-immediately, making the repeat a no-op; if it died, the repeat brings it back.
-
-```
-schtasks /query /tn "DY Portal"
-```
+Displays are macOS only. `npm run dist:win` still works for testing the app on a
+Windows dev machine, but there is no supervisor for it — run it by hand.
 
 ### Stopping it on purpose
 
-The two supervisors treat a deliberate quit differently, so the procedure is not
-the same on both.
+`Cmd+Shift+Q` exits cleanly and stays stopped: `KeepAlive` restarts the app only
+on *abnormal* exit. `pkill` **is** an abnormal exit, so launchd brings it right
+back — quitting it harder is the wrong instinct here.
 
-**macOS.** `Cmd+Shift+Q` exits cleanly and stays stopped — `KeepAlive` is set to
-restart only on abnormal exit. But `pkill` *is* an abnormal exit, so launchd
-brings it straight back. To stop it for maintenance, unload the agent first:
+To stop it for maintenance, unload the agent first:
 
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.deyan.portal.plist
@@ -280,28 +263,17 @@ pkill -f "DY Portal"
 launchctl load -w ~/Library/LaunchAgents/com.deyan.portal.plist
 ```
 
-**Windows.** Task Scheduler cannot distinguish a deliberate quit from a crash —
-it simply retries every 5 minutes — so `Ctrl+Shift+Q` alone is undone within 5
-minutes. Disable the task first:
-
-```
-schtasks /change /tn "DY Portal" /disable
-taskkill /IM "DY Portal.exe" /F
-rem re-enable
-schtasks /change /tn "DY Portal" /enable
-```
-
 ### Verifying it works
 
 Kill the app and confirm it comes back:
 
 ```bash
-pkill -f "DY Portal"          # macOS
-taskkill /IM "DY Portal.exe" /F   # Windows
+pkill -f "DY Portal"
 ```
 
-macOS should relaunch within ~10 seconds (the `ThrottleInterval`), Windows within
-5 minutes. Then reboot the machine and confirm the portal returns unattended.
+It should relaunch within ~10 seconds (the `ThrottleInterval`). Then reboot the
+machine and confirm the portal returns unattended — that also verifies auto-login
+is enabled, without which the agent never runs.
 
 ## URL Parameters
 
