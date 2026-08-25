@@ -180,9 +180,46 @@ Edit `portal.config.json` — set `portalUrl` to your Render URL, `password` to
 `PORTAL_PASSWORD`, and `localOffice`/`remoteOffice` per machine (NY gets
 `office-ny` / `office-serbia`; Serbia gets the reverse).
 
+On a machine that already has the app installed, you don't need to touch the
+file at all — press `Cmd+Ctrl+Shift+S` on the display and use the **Settings**
+window (see [Settings window](#settings-window)).
+
 This file holds the password and is gitignored. Every value can also be
 overridden by environment variable: `PORTAL_URL`, `PORTAL_PASSWORD`,
 `PORTAL_LOCAL_OFFICE`, `PORTAL_REMOTE_OFFICE`, `PORTAL_KIOSK`.
+
+`kiosk` is **off by default**. The window is already fullscreen and frameless
+without it, so it only adds a lock: no app switching and no way out of
+fullscreen. That is what an unattended display wants, so set `"kiosk": true` on
+the two office machines — but leave it off anywhere you also intend to use the
+computer, because a kiosk window is genuinely hard to escape (see
+[Kiosk shortcuts](#kiosk-shortcuts)). If the process is killed while kiosk is
+active, macOS can be left with the Dock and menu bar still hidden; `killall
+Dock` puts them back.
+
+### Settings window
+
+Pressing `Cmd+Ctrl+Shift+S` (`Ctrl+Shift+S` on Windows) on a running display
+opens a settings window for the server URL, password, the two office IDs, and
+kiosk mode. It writes `portal.config.json` to the userData path below, then
+re-authenticates and reloads the portal in place — no restart, and nothing to
+type into a terminal on a machine that may have no keyboard attached.
+
+It is deliberately undiscoverable: no menu item, no on-screen control, and the
+same three-modifier chord as quit, so a display in a shared space does not
+present a password field to anyone who brushes the keyboard.
+
+Two things it enforces that hand-editing does not:
+
+- **Local and remote office must differ.** Two displays claiming the same ID is
+  not a loud failure — the second is rejected by the signaling server with
+  `ID is taken`, retries forever, and *both* offices show as offline.
+- **A blank password field keeps the stored password** rather than clearing it,
+  so changing an office ID cannot silently strand a display on the login page.
+
+The stored password is never sent to the settings window — only whether one
+exists. The window also gets its own preload script: the portal window loads
+remote content from the server and is handed nothing but a fullscreen toggle.
 
 ### Run and package
 
@@ -195,8 +232,17 @@ npm run dist:win           # build an .exe installer
 For a packaged app, put `portal.config.json` in the app's userData directory
 instead of the bundle, so the password isn't baked into a shipped binary:
 
-- macOS: `~/Library/Application Support/DY Portal/portal.config.json`
-- Windows: `%APPDATA%\DY Portal\portal.config.json`
+- macOS: `~/Library/Application Support/dy-portal-desktop/portal.config.json`
+- Windows: `%APPDATA%\dy-portal-desktop\portal.config.json`
+
+The folder is `dy-portal-desktop`, not `DY Portal`: Electron derives userData from
+the `name` in `package.json`, and `productName` is set inside the `build` block,
+which only electron-builder reads. Get this path wrong and the app silently falls
+back to its defaults — the production URL with an empty password — which on a
+display with no keyboard means it sits on the login page.
+
+Without a config file the app is pointed at production but cannot log itself in,
+so this step is what makes an unattended display work at all.
 
 macOS builds must run **on a Mac** — electron-builder cannot produce macOS
 artifacts from Windows or Linux. Full display setup is in
@@ -228,13 +274,20 @@ less.
 
 ### Kiosk shortcuts
 
-Kiosk mode hides the window chrome, so these are the way out:
+The window is frameless and fullscreen whether or not kiosk mode is on, so there
+is no title bar to close it with. These are the way out:
 
 | Shortcut | Action |
 |----------|--------|
-| `Cmd/Ctrl+Shift+Q` | Quit |
+| `Cmd+Q` | Quit (macOS, ordinary menu shortcut) |
+| `Cmd+Ctrl+Shift+Q` / `Ctrl+Shift+Q` | Quit (macOS / Windows) |
 | `Cmd/Ctrl+Shift+R` | Reload the portal |
 | `Cmd/Ctrl+Shift+I` | Toggle DevTools |
+| `Cmd+Ctrl+Shift+S` / `Ctrl+Shift+S` | Open Settings (macOS / Windows) |
+
+Quit takes Control as well on macOS: `Cmd+Shift+Q` is the Apple menu's **Log
+Out** shortcut, and macOS claims it before the window sees it, so a quit bound
+there would never fire.
 
 They need the portal window focused and its renderer alive. If it is wedged hard
 enough not to take input, kill the process instead — the supervisor will bring it

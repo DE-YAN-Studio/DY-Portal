@@ -1,4 +1,4 @@
-const { app, BrowserWindow, session, systemPreferences, powerSaveBlocker, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, session, systemPreferences, powerSaveBlocker, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -16,7 +16,13 @@ const DEFAULTS = {
   password: '',
   localOffice: 'office-ny',
   remoteOffice: 'office-serbia',
-  kiosk: true
+  // Off by default. The window is already fullscreen and frameless, so kiosk
+  // mode adds only one thing: it takes away app switching and the ways out of
+  // fullscreen. On an unattended display that is the point, so set it in
+  // portal.config.json there - but it makes the app unusable to develop
+  // against, and if the process is killed while kiosk is active macOS can be
+  // left with the Dock and menu bar still hidden.
+  kiosk: false
 };
 
 const RETRY_BASE_MS = 2000;
@@ -30,14 +36,22 @@ let config = DEFAULTS;
 // Distinguishes "someone asked us to quit" from "we lost the window", so only
 // the former is allowed to end the process.
 let isQuitting = false;
+let settingsWindow = null;
 
 // Config comes from, in increasing order of precedence: the bundled defaults, a
 // portal.config.json placed next to the app or in userData, then environment
 // variables. That lets one signed build serve both offices - only the config
 // file differs between machines.
+// The one location the settings window writes to, and the first place
+// loadConfig looks. Keeping it in userData rather than beside the app means a
+// reinstall does not wipe the password.
+function configFilePath() {
+  return path.join(app.getPath('userData'), 'portal.config.json');
+}
+
 function loadConfig() {
   const candidates = [
-    path.join(app.getPath('userData'), 'portal.config.json'),
+    configFilePath(),
     path.join(process.resourcesPath || __dirname, 'portal.config.json'),
     path.join(__dirname, 'portal.config.json')
   ];
@@ -187,10 +201,18 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     show: false,
     kiosk: config.kiosk,
-    fullscreen: config.kiosk,
+    // The display only ever shows the far office, so it comes up fullscreen and
+    // frameless unconditionally - a title bar is a strip of grey that steals
+    // height from the video and offers a stray click target. `kiosk` is still
+    // configurable on top of this: it additionally blocks the ways *out* of
+    // fullscreen, which is what an unattended display wants and a developer
+    // debugging on a laptop does not.
+    fullscreen: true,
+    frame: false,
     autoHideMenuBar: true,
     backgroundColor: '#000000',
     webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       // The portal is a video call that must keep running while unfocused;
@@ -241,13 +263,18 @@ function createWindow() {
     if (!isPortalUrl(url) && !url.startsWith('file://')) event.preventDefault();
   });
 
-  // Kiosk mode swallows the normal window chrome, so this is the way out.
+  // The window is frameless, and kiosk mode also takes away app switching, so
+  // these are the way out.
   mainWindow.webContents.on('before-input-event', (event, input) => {
     const mod = process.platform === 'darwin' ? input.meta : input.control;
     if (!mod || !input.shift) return;
 
     const key = input.key.toLowerCase();
     if (key === 'q') {
+      // Quit takes Control as well on macOS, because Cmd+Shift+Q is the Apple
+      // menu's Log Out shortcut - the system claims it before the window ever
+      // sees the keystroke, so binding quit there means it never fires.
+      if (process.platform === 'darwin' && !input.control) return;
       event.preventDefault();
       app.quit();
     } else if (key === 'i') {
@@ -257,6 +284,13 @@ function createWindow() {
       event.preventDefault();
       retryAttempts = 0;
       loadPortal();
+    } else if (key === 's') {
+      // Deliberately the same three-modifier chord as quit. A display in a
+      // shared space should not surface its password field to anyone who
+      // brushes the keyboard, so there is no menu item and no on-screen way in.
+      if (process.platform === 'darwin' && !input.control) return;
+      event.preventDefault();
+      openSettings();
     }
   });
 
@@ -264,6 +298,133 @@ function createWindow() {
     mainWindow = null;
   });
 }
+
+// The portal's fullscreen button, forwarded from the renderer by preload.js.
+// Registered once for the process rather than per window, so it survives the
+// window being reopened after a crash.
+ipcMain.handle('toggle-fullscreen', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+
+  const goFullscreen = !mainWindow.isFullScreen();
+
+  // Kiosk mode is fullscreen plus a lock on the ways out of it, so it has to be
+  // released before the window will leave fullscreen - and put back on the way
+  // in, or one press would leave an unattended display escapable for good.
+  if (config.kiosk) mainWindow.setKiosk(goFullscreen);
+  mainWindow.setFullScreen(goFullscreen);
+
+  console.log(`Fullscreen toggled -> ${goFullscreen}`);
+  return goFullscreen;
+});
+
+// The settings window is the supported way to point a display at a server and
+// tell it which office it is. Before this existed the config had to be hand
+// written into userData, and getting the path wrong was silent: the app fell
+// back to its defaults, came up as office-ny, and collided with the real NY
+// display over the peer ID.
+function openSettings() {
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    settingsWindow.focus();
+    return;
+  }
+
+  settingsWindow = new BrowserWindow({
+    width: 520,
+    height: 560,
+    title: 'Portal Settings',
+    backgroundColor: '#16181d',
+    // The portal window may be kiosk or fullscreen, which would otherwise sit
+    // on top of this one and make it look like nothing happened.
+    alwaysOnTop: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'settings-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+
+  settingsWindow.loadFile(path.join(__dirname, 'settings.html'));
+  settingsWindow.on('closed', () => { settingsWindow = null; });
+}
+
+ipcMain.handle('settings:load', () => ({
+  configPath: configFilePath(),
+  portalUrl: config.portalUrl,
+  localOffice: config.localOffice,
+  remoteOffice: config.remoteOffice,
+  kiosk: config.kiosk,
+  // Whether a password exists, never the password itself.
+  hasPassword: Boolean(config.password)
+}));
+
+ipcMain.handle('settings:close', () => {
+  if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.close();
+});
+
+ipcMain.handle('settings:save', async (event, values) => {
+  const portalUrl = String(values.portalUrl || '').trim();
+  const localOffice = String(values.localOffice || '').trim();
+  const remoteOffice = String(values.remoteOffice || '').trim();
+
+  try {
+    new URL(portalUrl);
+  } catch {
+    return { ok: false, error: 'Server URL is not a valid URL.' };
+  }
+
+  if (!localOffice || !remoteOffice) {
+    return { ok: false, error: 'Both office IDs are required.' };
+  }
+
+  // The check that matters most. Two displays sharing an ID do not fail
+  // loudly - the second one is refused by the signaling server with
+  // "ID is taken", retries forever, and both offices show as offline.
+  if (localOffice === remoteOffice) {
+    return { ok: false, error: 'Local and remote office must differ.' };
+  }
+
+  // A blank password means "keep the stored one", so that reopening this
+  // window and saving an unrelated change cannot silently clear it.
+  const password = values.password ? String(values.password) : config.password;
+
+  const next = {
+    portalUrl,
+    password,
+    localOffice,
+    remoteOffice,
+    kiosk: Boolean(values.kiosk)
+  };
+
+  const file = configFilePath();
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    // Written via a temp file and renamed so a crash mid-write cannot leave a
+    // truncated config, which would send the display back to the defaults.
+    const tmp = `${file}.tmp`;
+    fs.writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    return { ok: false, error: `Could not write config: ${err.message}` };
+  }
+
+  console.log(`Settings saved to ${file}`);
+
+  config = loadConfig();
+  console.log(`Portal: ${config.portalUrl} as ${config.localOffice} -> ${config.remoteOffice}`);
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setKiosk(config.kiosk);
+  }
+
+  if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.close();
+
+  // Reconnect with the new identity rather than making someone restart the app
+  // on a machine that may have no keyboard.
+  retryAttempts = 0;
+  await loadPortal();
+
+  return { ok: true, warning: config.password ? null : 'No password set - the portal will show its login page.' };
+});
 
 // A second copy would fight the first for the camera and for the peer ID.
 if (!app.requestSingleInstanceLock()) {
@@ -303,6 +464,14 @@ if (!app.requestSingleInstanceLock()) {
 
   app.on('before-quit', () => {
     isQuitting = true;
+
+    // Coming out of kiosk mode deliberately gives the Dock and menu bar back.
+    // Quitting straight out of it can leave macOS with both still hidden, which
+    // looks like a machine that has stopped switching apps.
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isKiosk()) {
+      mainWindow.setKiosk(false);
+    }
+
     if (retryTimer) clearTimeout(retryTimer);
     if (powerBlockerId !== null && powerSaveBlocker.isStarted(powerBlockerId)) {
       powerSaveBlocker.stop(powerBlockerId);

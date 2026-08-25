@@ -20,6 +20,9 @@
     "productName": "DY Portal",
     "files": [
       "main.js",
+      "preload.js",
+      "settings-preload.js",
+      "settings.html",
       "offline.html",
       "portal.config.json"
     ],

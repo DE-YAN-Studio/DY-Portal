@@ -513,6 +513,14 @@ window.rotateCamera = function() {
 };
 
 window.toggleFullscreen = function() {
+  // The desktop app runs frameless and already fullscreen, so the Fullscreen
+  // API has nothing left to hide there - preload.js exposes the real window
+  // instead. In a browser there is chrome to hide, so the API still applies.
+  if (window.portal) {
+    window.portal.toggleFullscreen();
+    return;
+  }
+
   if (!document.fullscreenElement) {
     document.documentElement.requestFullscreen().catch(err => {
       console.error('Fullscreen error:', err);
