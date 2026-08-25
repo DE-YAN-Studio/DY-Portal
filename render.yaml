@@ -23,3 +23,13 @@ services:
       # Set in the Render dashboard - deliberately not stored in the repo.
       - key: PORTAL_PASSWORD
         sync: false
+      # TURN relay, served to the client by /api/ice. Without it the two
+      # offices can only connect when they have a direct path to each other,
+      # which two NAT'd offices generally do not - signaling succeeds and no
+      # video ever arrives. Credentials are set in the dashboard.
+      - key: TURN_URLS
+        sync: false
+      - key: TURN_USERNAME
+        sync: false
+      - key: TURN_CREDENTIAL
+        sync: false

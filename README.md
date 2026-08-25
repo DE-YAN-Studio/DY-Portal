@@ -66,7 +66,34 @@ on "Calling…" until the service wakes.
 
 Rotating `SESSION_SECRET` signs every office out, so change it only on purpose.
 
-### 3. Access the portal
+### 3. Set up TURN
+
+WebRTC carries the video peer-to-peer, and two offices behind NAT usually cannot
+reach each other directly — they need a relay. Point these at a TURN provider:
+
+| Variable | Value |
+|----------|-------|
+| `TURN_URLS` | comma-separated, e.g. `turn:turn.example.com:3478?transport=udp,turns:turn.example.com:5349` |
+| `TURN_USERNAME` | provider username |
+| `TURN_CREDENTIAL` | provider credential |
+| `STUN_URLS` | optional; defaults to `stun:stun.cloudflare.com:3478` |
+
+The client fetches this from `/api/ice` at every connection, so credentials stay
+on the server, rotate without redeploying a display, and never sit in the repo.
+
+**Do not rely on the defaults built into PeerJS.** It ships a hardcoded list
+pointing at `eu-0.turn.peerjs.com` and `us-0.turn.peerjs.com`, which no longer
+resolve. The failure is quiet and misleading: signaling connects, both offices
+appear in `/health`, and the screens stay black. If TURN is unset the server says
+so at startup, and `/api/ice` serves STUN alone.
+
+Verify what a display is actually being given:
+
+```bash
+grep "ICE servers:" /Users/Shared/portal/portal.log
+```
+
+### 4. Access the portal
 
 Open the service's `https://<name>.onrender.com` URL. You'll be prompted to log
 in, then redirected to the portal.
@@ -119,6 +146,7 @@ portal/
 | `/login` | Login page |
 | `/api/login` | POST: authenticate with password |
 | `/api/logout` | POST: clear session |
+| `/api/ice` | GET: `{ iceServers }` for WebRTC; requires a session |
 | `/health` | Health check: `{ status, peers, peerIds }` |
 | `/client/` | Portal web client (requires auth) |
 | `/peerjs` | PeerJS WebSocket endpoint |

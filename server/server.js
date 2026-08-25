@@ -48,6 +48,10 @@ function verifySession(cookie) {
   return Number.isFinite(age) && age >= 0 && age < SESSION_MAX_AGE;
 }
 
+if (!process.env.TURN_URLS) {
+  console.warn('TURN_URLS is not set - offices that cannot reach each other directly have no relay, and will connect to signaling but show no video.');
+}
+
 const server = app.listen(PORT, () => {
   console.log(`Portal server listening on port ${PORT}`);
 });
@@ -88,6 +92,41 @@ app.post('/api/login', (req, res) => {
 app.post('/api/logout', (req, res) => {
   res.clearCookie('session');
   res.json({ success: true });
+});
+
+// ICE configuration is served rather than baked into the client, so TURN
+// credentials live in one place and never reach the repo or a display's config
+// file. Behind requireAuth because these are credentials, and the client only
+// asks for them once it already holds a session.
+function splitUrls(value) {
+  return (value || '').split(',').map((url) => url.trim()).filter(Boolean);
+}
+
+function iceServers() {
+  const servers = [];
+
+  const stunUrls = splitUrls(process.env.STUN_URLS || 'stun:stun.cloudflare.com:3478');
+  if (stunUrls.length) servers.push({ urls: stunUrls });
+
+  const turnUrls = splitUrls(process.env.TURN_URLS);
+  if (!turnUrls.length) return servers;
+
+  if (!process.env.TURN_USERNAME || !process.env.TURN_CREDENTIAL) {
+    console.warn('TURN_URLS is set but TURN_USERNAME or TURN_CREDENTIAL is missing - serving STUN only.');
+    return servers;
+  }
+
+  servers.push({
+    urls: turnUrls,
+    username: process.env.TURN_USERNAME,
+    credential: process.env.TURN_CREDENTIAL
+  });
+
+  return servers;
+}
+
+app.get('/api/ice', requireAuth, (req, res) => {
+  res.json({ iceServers: iceServers() });
 });
 
 app.use('/client', requireAuth, express.static(path.join(__dirname, '../client')));

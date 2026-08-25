@@ -167,15 +167,52 @@ window.continueWithoutCamera = function() {
   updateStatus('Connected without camera');
 };
 
-function connectToPeerServer() {
+// PeerJS falls back to its own hardcoded ICE servers when it is given none,
+// and those hosts stopped resolving - which presents as a perfectly healthy
+// signaling connection carrying no video. The server owns the list instead, so
+// TURN credentials stay in one place and can rotate without touching a display.
+async function fetchIceServers() {
+  try {
+    const response = await fetch('/api/ice', { credentials: 'same-origin' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const body = await response.json();
+    if (!Array.isArray(body.iceServers) || body.iceServers.length === 0) {
+      throw new Error('none configured');
+    }
+
+    return body.iceServers;
+  } catch (err) {
+    console.error(`Could not fetch ICE servers (${err.message}) - falling back to STUN only`);
+    return config.ICE_SERVERS_FALLBACK;
+  }
+}
+
+let connecting = false;
+
+async function connectToPeerServer() {
+  // Fetching the ICE config yields to the network. Without this guard a
+  // reconnect firing during that window would build a second Peer on the same
+  // ID, and the two would take turns evicting each other.
+  if (connecting) return;
+  connecting = true;
+
   updateStatus('Connecting to signaling server...');
+
+  // Refetched per connection rather than cached, because TURN credentials from
+  // a managed provider are typically short-lived.
+  const iceServers = await fetchIceServers();
+  console.log(`ICE servers: ${iceServers.map((s) => s.urls).join(', ')}`);
 
   peer = new Peer(LOCAL_ID, {
     host: config.PEER_SERVER_HOST,
     port: config.PEER_SERVER_PORT,
     path: config.PEER_SERVER_PATH,
-    secure: config.PEER_SERVER_SECURE
+    secure: config.PEER_SERVER_SECURE,
+    config: { iceServers }
   });
+
+  connecting = false;
 
   peer.on('open', (id) => {
     console.log('Connected to peer server with ID:', id);
