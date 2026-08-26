@@ -410,8 +410,11 @@ function handleRemoteStream(stream) {
     }
   });
 
-  document.getElementById('offline-overlay').classList.add('hidden');
+  hideOfflineOverlay();
   resetReconnectAttempts();
+  // Baseline against the connection this stream arrived on, so the first check
+  // after a new call compares like with like.
+  measuredConnection = currentCall && currentCall.peerConnection;
   lastBytesReceived = 0;
   stalledChecks = 0;
   updateStatus('Connected');
@@ -419,6 +422,10 @@ function handleRemoteStream(stream) {
 
 function showOfflineOverlay() {
   document.getElementById('offline-overlay').classList.remove('hidden');
+}
+
+function hideOfflineOverlay() {
+  document.getElementById('offline-overlay').classList.add('hidden');
 }
 
 function connectData() {
@@ -515,22 +522,32 @@ function reconnect() {
 // for hours. On an unattended display nobody is there to spot a black screen, so
 // this watches for media actually moving rather than for an error.
 const STALL_CHECK_MS = 60000;
+// One odd sample is not an outage. The overlay waits for a second consecutive
+// stalled check, so a single hiccup never covers a working picture.
+const STALLED_CHECKS_BEFORE_OVERLAY = 2;
 const STALLED_CHECKS_BEFORE_RECONNECT = 3;
 const STALLED_CHECKS_BEFORE_RELOAD = 8;
 
 let lastBytesReceived = 0;
 let stalledChecks = 0;
+// Which PeerConnection lastBytesReceived was measured on. bytesReceived is
+// per-connection and starts from zero, so comparing a new call's counter
+// against the previous call's total reads as a stall for as long as it takes
+// the new one to out-total the old - on a healthy call, minutes of false
+// alarms ending in the watchdog tearing down a connection that was fine.
+let measuredConnection = null;
 
 async function inboundBytes() {
-  if (!currentCall || !currentCall.peerConnection) return null;
+  const pc = currentCall && currentCall.peerConnection;
+  if (!pc) return null;
 
   try {
-    const stats = await currentCall.peerConnection.getStats();
+    const stats = await pc.getStats();
     let bytes = 0;
     stats.forEach((report) => {
       if (report.type === 'inbound-rtp') bytes += report.bytesReceived || 0;
     });
-    return bytes;
+    return { pc, bytes };
   } catch (err) {
     console.error('Could not read call stats:', err.message);
     return null;
@@ -538,23 +555,37 @@ async function inboundBytes() {
 }
 
 async function checkForStall() {
-  const bytes = await inboundBytes();
+  const sample = await inboundBytes();
 
   // No call at all is the reconnect logic's business, not this watchdog's.
-  if (bytes === null) {
+  if (sample === null) {
     stalledChecks = 0;
     return;
   }
 
-  if (bytes > lastBytesReceived) {
-    lastBytesReceived = bytes;
+  // A different connection than last time: rebaseline rather than compare
+  // across them. Not a stall, and not evidence of health either.
+  if (sample.pc !== measuredConnection) {
+    measuredConnection = sample.pc;
+    lastBytesReceived = sample.bytes;
     stalledChecks = 0;
+    return;
+  }
+
+  if (sample.bytes > lastBytesReceived) {
+    lastBytesReceived = sample.bytes;
+    stalledChecks = 0;
+    // Media is moving, so anything the watchdog put up should come down. It is
+    // the only thing that can clear its own overlay: handleRemoteStream fires
+    // once per call, so without this a single stalled check leaves "Office
+    // Offline" over a live picture until the next reconnect.
+    hideOfflineOverlay();
     return;
   }
 
   stalledChecks++;
-  console.warn(`No media for ${stalledChecks} check(s) (${bytes} bytes total)`);
-  showOfflineOverlay();
+  console.warn(`No media for ${stalledChecks} check(s) (${sample.bytes} bytes total)`);
+  if (stalledChecks >= STALLED_CHECKS_BEFORE_OVERLAY) showOfflineOverlay();
 
   // A full page reload is the only thing that reliably gives back ICE sockets
   // the renderer has leaked, which is what took the portal down overnight.
@@ -577,6 +608,7 @@ async function checkForStall() {
     console.warn('Media stalled - tearing down the call and reconnecting');
     setCurrentCall(null);
     lastBytesReceived = 0;
+    measuredConnection = null;
     if (peer && !peer.destroyed) peer.destroy();
     peer = null;
     connectToPeerServer();
