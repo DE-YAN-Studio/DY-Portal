@@ -22,6 +22,29 @@ packets and barely touches CPU. Ubuntu, so it matches the VM this project used
 before. Assign it a **reserved** public IP, not an ephemeral one: the IP goes
 into the portal's config, and an ephemeral address changes on stop/start.
 
+Oracle cannot convert an ephemeral IP to a reserved one in place — the address
+changes — so reserve it before wiring anything to the address. The Always Free
+allowance is one reserved public IP per tenancy, so check for an existing one
+before creating a new one:
+
+```bash
+oci network public-ip list -c <tenancy-ocid> --scope REGION --all \
+  --query 'data[*].{ip:"ip-address",state:"lifecycle-state",name:"display-name"}' --output table
+```
+
+To attach a reserved IP, delete the ephemeral one first — a private IP can only
+carry one public address — then assign the reserved one. SSH drops between the
+two steps:
+
+```bash
+oci network public-ip delete --public-ip-id <ephemeral-ocid> --force --wait-for-state TERMINATED
+oci network public-ip update --public-ip-id <reserved-ocid> --private-ip-id <private-ip-ocid>
+```
+
+Then update `external-ip` in `/etc/turnserver.conf` and restart coturn — Oracle's
+instance metadata does **not** expose the public IP (it is NAT'd onto the private
+one), so nothing can derive this value automatically.
+
 ## 2. Open the ports — twice
 
 This is where Oracle deployments usually fail. There are two independent
