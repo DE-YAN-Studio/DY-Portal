@@ -180,6 +180,12 @@ Edit `portal.config.json` — set `portalUrl` to your Render URL, `password` to
 `PORTAL_PASSWORD`, and `localOffice`/`remoteOffice` per machine (NY gets
 `office-ny` / `office-serbia`; Serbia gets the reverse).
 
+There is **no default office**. An unconfigured app shows a "Not configured"
+screen and opens Settings rather than guessing: a default identity would have a
+fresh install claim an ID a real display already holds, and that collision is
+silent — the loser is refused with `ID is taken` and retries forever, so
+whichever machine wins the race decides which office goes dark.
+
 On a machine that already has the app installed, you don't need to touch the
 file at all — press `Cmd+Ctrl+Shift+S` on the display and use the **Settings**
 window (see [Settings window](#settings-window)).
@@ -208,6 +214,24 @@ type into a terminal on a machine that may have no keyboard attached.
 It is deliberately undiscoverable: no menu item, no on-screen control, and the
 same three-modifier chord as quit, so a display in a shared space does not
 present a password field to anyone who brushes the keyboard.
+
+The office is a **dropdown**, not a text field, and there is only one: you pick
+which display this machine is, and the office it calls is derived from the pair.
+That makes "local and remote are the same" structurally impossible instead of
+something to catch in validation, and removes the chance of a typo in an ID that
+has to match exactly on both ends.
+
+Three ways in, in descending order of reliability on a locked-down display:
+
+| Route | Works when |
+|-------|-----------|
+| `Cmd+Ctrl+Shift+S` / `Ctrl+Shift+S` | always, including kiosk mode |
+| **Settings…** in the app menu (`Cmd+,`) | app focused; the accelerator works even when the menu bar is hidden |
+| **DY Portal** menu-bar icon → Open Settings | only while the menu bar is visible — hover the top edge in fullscreen; never in kiosk mode |
+
+The window is fullscreen and covers the menu bar, so the menu-bar icon is not a
+substitute for the chord on an unattended display. Keep the chord written down
+somewhere.
 
 It also carries a **Launch at login** checkbox, which registers the app with
 macOS directly — no plist to hand-install. Note what it does and does not cover:

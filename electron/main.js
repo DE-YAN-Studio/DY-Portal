@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, session, systemPreferences, powerSaveBlocker, shell } = require('electron');
+const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, session, systemPreferences, powerSaveBlocker, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -11,11 +11,31 @@ const fs = require('fs');
 // reboot. That is left to the OS supervisor - see scripts/com.deyan.portal.plist,
 // the LaunchAgent that runs on the display machines.
 
+// The displays that exist. A single dropdown picks which one this machine is,
+// and the far end is derived - with two offices there is nothing to choose, and
+// deriving it makes "local and remote are the same" structurally impossible
+// rather than something to validate after the fact. Adding a third office means
+// this can no longer be derived and a remote picker has to come back.
+const OFFICES = [
+  { id: 'office-ny', label: 'New York' },
+  { id: 'office-serbia', label: 'Serbia' }
+];
+
+function remoteFor(localOffice) {
+  const other = OFFICES.find((o) => o.id !== localOffice);
+  return other ? other.id : '';
+}
+
 const DEFAULTS = {
   portalUrl: 'https://dy-portal.onrender.com',
   password: '',
-  localOffice: 'office-ny',
-  remoteOffice: 'office-serbia',
+  // Deliberately empty. A default office identity is actively dangerous: a
+  // fresh install would claim an ID that a real display already holds, and the
+  // collision is silent - the loser gets "ID is taken" and retries forever, so
+  // whichever machine wins the race decides which office goes dark. An
+  // unconfigured display should say so instead of impersonating one.
+  localOffice: '',
+  remoteOffice: '',
   // Off by default. The window is already fullscreen and frameless, so kiosk
   // mode adds only one thing: it takes away app switching and the ways out of
   // fullscreen. On an unattended display that is the point, so set it in
@@ -37,6 +57,8 @@ let config = DEFAULTS;
 // the former is allowed to end the process.
 let isQuitting = false;
 let settingsWindow = null;
+// Held at module scope or the tray is garbage collected and vanishes.
+let tray = null;
 
 // Config comes from, in increasing order of precedence: the bundled defaults, a
 // portal.config.json placed next to the app or in userData, then environment
@@ -181,6 +203,15 @@ function scheduleRetry(reason) {
 async function loadPortal() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
 
+  // Never load the portal without an identity. The client reads the office from
+  // query params, and empty ones would have it build a Peer with an empty ID.
+  if (!isConfigured()) {
+    console.warn('No office configured - open Settings to set this display\'s office.');
+    showUnconfiguredPage();
+    openSettings();
+    return;
+  }
+
   await ensureLoggedIn(session.defaultSession);
 
   try {
@@ -190,6 +221,19 @@ async function loadPortal() {
     showOfflinePage();
     scheduleRetry(`Could not reach the portal (${err.message})`);
   }
+}
+
+// Both offices must be named, and they must differ - two peers on one ID is the
+// same silent failure as a default identity.
+function isConfigured() {
+  return Boolean(config.localOffice) &&
+    Boolean(config.remoteOffice) &&
+    config.localOffice !== config.remoteOffice;
+}
+
+function showUnconfiguredPage() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.loadFile(path.join(__dirname, 'unconfigured.html')).catch(() => {});
 }
 
 function showOfflinePage() {
@@ -282,8 +326,7 @@ function createWindow() {
       mainWindow.webContents.toggleDevTools();
     } else if (key === 'r') {
       event.preventDefault();
-      retryAttempts = 0;
-      loadPortal();
+      reloadPortal();
     } else if (key === 's') {
       // Deliberately the same three-modifier chord as quit. A display in a
       // shared space should not surface its password field to anyone who
@@ -323,8 +366,7 @@ ipcMain.handle('toggle-fullscreen', () => {
 // recovers instead of parking on a login page nobody is there to fill in.
 ipcMain.handle('reload-portal', async () => {
   console.log('Renderer asked for a re-authenticated reload');
-  retryAttempts = 0;
-  await loadPortal();
+  await reloadPortal();
   return true;
 });
 
@@ -387,6 +429,7 @@ function envOverrides() {
 ipcMain.handle('settings:load', () => ({
   configPath: configFilePath(),
   envOverrides: envOverrides(),
+  offices: OFFICES,
   portalUrl: config.portalUrl,
   localOffice: config.localOffice,
   remoteOffice: config.remoteOffice,
@@ -404,7 +447,6 @@ ipcMain.handle('settings:close', () => {
 ipcMain.handle('settings:save', async (event, values) => {
   const portalUrl = String(values.portalUrl || '').trim();
   const localOffice = String(values.localOffice || '').trim();
-  const remoteOffice = String(values.remoteOffice || '').trim();
 
   try {
     new URL(portalUrl);
@@ -412,15 +454,19 @@ ipcMain.handle('settings:save', async (event, values) => {
     return { ok: false, error: 'Server URL is not a valid URL.' };
   }
 
-  if (!localOffice || !remoteOffice) {
-    return { ok: false, error: 'Both office IDs are required.' };
+  if (!localOffice) {
+    return { ok: false, error: 'Choose which office this display is.' };
   }
 
-  // The check that matters most. Two displays sharing an ID do not fail
-  // loudly - the second one is refused by the signaling server with
-  // "ID is taken", retries forever, and both offices show as offline.
-  if (localOffice === remoteOffice) {
-    return { ok: false, error: 'Local and remote office must differ.' };
+  // The dropdown can only offer known offices, but the value still arrives from
+  // a renderer, so it is checked rather than trusted.
+  if (!OFFICES.some((o) => o.id === localOffice)) {
+    return { ok: false, error: `Unknown office "${localOffice}".` };
+  }
+
+  const remoteOffice = remoteFor(localOffice);
+  if (!remoteOffice) {
+    return { ok: false, error: 'No other office is configured to call.' };
   }
 
   // A blank password means "keep the stored one", so that reopening this
@@ -475,6 +521,65 @@ ipcMain.handle('settings:save', async (event, values) => {
   return { ok: true, warning: config.password ? null : 'No password set - the portal will show its login page.' };
 });
 
+// Two ways in besides the keyboard chord: the app menu and a menu-bar icon.
+// Both are unreachable while kiosk mode is on - macOS hides the menu bar
+// entirely - so the chord stays the only way in on a locked-down display.
+function buildAppMenu() {
+  const template = [];
+
+  if (process.platform === 'darwin') {
+    template.push({
+      label: app.name,
+      submenu: [
+        { label: 'Settings…', accelerator: 'CommandOrControl+,', click: openSettings },
+        { type: 'separator' },
+        { label: 'Reload Portal', accelerator: 'CommandOrControl+Shift+R', click: reloadPortal },
+        { type: 'separator' },
+        { role: 'quit' }
+      ]
+    });
+  } else {
+    template.push({
+      label: 'File',
+      submenu: [
+        { label: 'Settings…', accelerator: 'CommandOrControl+,', click: openSettings },
+        { label: 'Reload Portal', accelerator: 'CommandOrControl+Shift+R', click: reloadPortal },
+        { type: 'separator' },
+        { role: 'quit' }
+      ]
+    });
+  }
+
+  // Without this the settings form loses copy, paste, and select-all: setting a
+  // custom application menu drops the defaults those shortcuts come from.
+  template.push({ role: 'editMenu' });
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+function createTray() {
+  const icon = nativeImage.createFromPath(path.join(__dirname, 'tray.png'));
+  if (icon.isEmpty()) {
+    console.error('Tray icon missing or unreadable - skipping the menu-bar item');
+    return;
+  }
+
+  tray = new Tray(icon.resize({ width: 18, height: 18 }));
+  tray.setToolTip('DY Portal');
+  console.log('Menu-bar item created');
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Open Settings…', click: openSettings },
+    { label: 'Reload Portal', click: reloadPortal },
+    { type: 'separator' },
+    { label: 'Quit DY Portal', click: () => app.quit() }
+  ]));
+}
+
+function reloadPortal() {
+  retryAttempts = 0;
+  loadPortal();
+}
+
 // A second copy would fight the first for the camera and for the peer ID.
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -485,7 +590,10 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(async () => {
     config = loadConfig();
-    console.log(`Portal: ${config.portalUrl} as ${config.localOffice} -> ${config.remoteOffice}`);
+    console.log(`Portal: ${config.portalUrl} as ${config.localOffice || '(unset)'} -> ${config.remoteOffice || '(unset)'}`);
+
+    buildAppMenu();
+    createTray();
 
     // An always-on display must not blank or the far office sees a dead screen.
     powerBlockerId = powerSaveBlocker.start('prevent-display-sleep');

@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Portal - Not configured</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: white;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      text-align: center;
+    }
+    h1 { margin: 0 0 0.75rem; font-size: 2rem; font-weight: 500; }
+    p { margin: 0 0 1.25rem; opacity: 0.6; }
+    kbd {
+      display: inline-block;
+      padding: 0.35rem 0.6rem;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      border-bottom-width: 2px;
+      border-radius: 6px;
+      font: inherit;
+      font-size: 0.95rem;
+    }
+  </style>
+</head>
+<body>
+  <div>
+    <h1>Not configured</h1>
+    <p>This display needs to be told which office it is.</p>
+    <p><kbd id="chord">Cmd + Ctrl + Shift + S</kbd> opens settings</p>
+  </div>
+  <script>
+    // The settings chord differs per platform, and a wrong hint on a screen
+    // with no other way in is worse than none.
+    if (!navigator.platform.startsWith('Mac')) {
+      document.getElementById('chord').textContent = 'Ctrl + Shift + S';
+    }
+  </script>
+</body>
+</html>

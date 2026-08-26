@@ -16,11 +16,13 @@
   .sub { color: #8b8f98; font-size: 12px; margin: 0 0 20px; }
   label { display: block; margin: 14px 0 5px; font-weight: 600; }
   .hint { font-weight: 400; color: #8b8f98; }
-  input[type=text], input[type=password] {
+  input[type=text], input[type=password], select {
     width: 100%; box-sizing: border-box; padding: 7px 9px;
     background: #0f1114; border: 1px solid #333840; border-radius: 5px;
     color: #e8e8ea; font: inherit;
   }
+  select { appearance: none; cursor: pointer; }
+  .derived { margin: 6px 0 0; font-size: 12px; color: #8b8f98; min-height: 1.2em; }
   input:focus { outline: none; border-color: #4c8dff; }
   .row { display: flex; gap: 12px; }
   .row > div { flex: 1; }
@@ -54,16 +56,11 @@
   <label for="password">Password <span class="hint" id="pwHint"></span></label>
   <input id="password" type="password" placeholder="Leave blank to keep current">
 
-  <div class="row">
-    <div>
-      <label for="localOffice">This display is <span class="hint">(local)</span></label>
-      <input id="localOffice" type="text" spellcheck="false" placeholder="office-ny">
-    </div>
-    <div>
-      <label for="remoteOffice">It calls <span class="hint">(remote)</span></label>
-      <input id="remoteOffice" type="text" spellcheck="false" placeholder="office-serbia">
-    </div>
-  </div>
+  <label for="localOffice">This display is</label>
+  <select id="localOffice">
+    <option value="">Choose an office…</option>
+  </select>
+  <p class="derived" id="calls"></p>
 
   <div class="check">
     <input id="kiosk" type="checkbox">
@@ -94,8 +91,28 @@
     const cfg = await window.portalSettings.load();
     $('path').textContent = cfg.configPath;
     $('portalUrl').value = cfg.portalUrl || '';
-    $('localOffice').value = cfg.localOffice || '';
-    $('remoteOffice').value = cfg.remoteOffice || '';
+    // Populated from the app so the two never drift apart. An office already in
+    // the config but no longer on the list is added rather than silently
+    // dropped - saving would otherwise change this display's identity without
+    // anyone asking for it.
+    const select = $('localOffice');
+    const known = cfg.offices || [];
+    for (const office of known) {
+      select.add(new Option(office.label, office.id));
+    }
+    if (cfg.localOffice && !known.some((o) => o.id === cfg.localOffice)) {
+      select.add(new Option(`${cfg.localOffice} (unrecognized)`, cfg.localOffice));
+    }
+    select.value = cfg.localOffice || '';
+
+    function showCalls() {
+      const other = known.find((o) => o.id !== select.value);
+      $('calls').textContent = select.value && other
+        ? `Calls ${other.label} (${other.id})`
+        : '';
+    }
+    select.addEventListener('change', showCalls);
+    showCalls();
     $('kiosk').checked = !!cfg.kiosk;
     $('launchAtLogin').checked = !!cfg.launchAtLogin;
     // Honest about what this does and does not cover: a login item starts the
@@ -118,7 +135,9 @@
         'Unset them for these settings to take effect.';
       warn.hidden = false;
     }
-    $('portalUrl').focus();
+    // The office is the thing that must be right on a new display, so it gets
+    // focus rather than the URL, which is almost always already correct.
+    select.focus();
   })();
 
   $('save').addEventListener('click', async () => {
@@ -128,8 +147,7 @@
     const result = await window.portalSettings.save({
       portalUrl: $('portalUrl').value.trim(),
       password: $('password').value,
-      localOffice: $('localOffice').value.trim(),
-      remoteOffice: $('remoteOffice').value.trim(),
+      localOffice: $('localOffice').value,
       kiosk: $('kiosk').checked,
       launchAtLogin: $('launchAtLogin').checked
     });
