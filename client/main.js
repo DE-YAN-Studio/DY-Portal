@@ -322,7 +322,7 @@ async function connectToPeerServer() {
   peer.on('disconnected', () => {
     console.log('Disconnected from peer server, attempting reconnect...');
     updateStatus('Disconnected, reconnecting...');
-    showOfflineOverlay();
+    showOfflineIfNoMedia('Signaling disconnected');
     setTimeout(() => {
       if (peer && !peer.destroyed) {
         peer.reconnect();
@@ -335,7 +335,7 @@ async function connectToPeerServer() {
   peer.on('error', (err) => {
     console.error('Peer error:', err);
     updateStatus(`Error: ${err.type}`);
-    showOfflineOverlay();
+    showOfflineIfNoMedia(`Peer error ${err.type}`);
 
     if (err.type === 'unavailable-id') {
       console.log('ID taken, retrying with delay...');
@@ -352,7 +352,7 @@ async function connectToPeerServer() {
   peer.on('close', () => {
     console.log('Peer connection closed');
     updateStatus('Connection closed');
-    showOfflineOverlay();
+    showOfflineIfNoMedia('Signaling closed');
     scheduleReconnect();
   });
 }
@@ -416,6 +416,7 @@ function handleRemoteStream(stream) {
   // after a new call compares like with like.
   measuredConnection = currentCall && currentCall.peerConnection;
   lastBytesReceived = 0;
+  lastMediaAt = Date.now();
   stalledChecks = 0;
   updateStatus('Connected');
 }
@@ -426,6 +427,27 @@ function showOfflineOverlay() {
 
 function hideOfflineOverlay() {
   document.getElementById('offline-overlay').classList.add('hidden');
+}
+
+// "Office Offline" means the far office's picture is not arriving. It does not
+// mean the signaling connection hiccuped: media flows peer-to-peer and does not
+// touch the server once a call is up, so a dropped WebSocket, a transient peer
+// error, or navigator.onLine flapping on a Wi-Fi handoff say nothing about
+// whether video is still playing. Covering a live picture because of those is
+// worse than saying nothing - a display that cries offline while working is one
+// nobody trusts when it is actually offline. A genuine media stall is caught by
+// the watchdog within two checks.
+function showOfflineIfNoMedia(reason) {
+  // Deliberately not isCallLive(): that treats ICE 'disconnected' as dead, but
+  // it is a transient warning state - a dropped signaling socket pushes the
+  // PeerConnection through it while frames keep arriving. Connection state is
+  // the wrong question anyway. The only thing that decides whether to cover the
+  // picture is whether the picture is arriving.
+  if (mediaLooksLive()) {
+    console.log(`${reason} while media is still arriving - leaving the picture up`);
+    return;
+  }
+  showOfflineOverlay();
 }
 
 function connectData() {
@@ -528,8 +550,19 @@ const STALLED_CHECKS_BEFORE_OVERLAY = 2;
 const STALLED_CHECKS_BEFORE_RECONNECT = 3;
 const STALLED_CHECKS_BEFORE_RELOAD = 8;
 
+// How recently bytes have to have arrived for the picture to count as live.
+// Longer than the check interval, so a signaling blip landing just before the
+// next sample does not read as an outage. If media really has stopped, the
+// watchdog covers the screen a couple of checks later anyway.
+const MEDIA_FRESH_MS = 90000;
+
 let lastBytesReceived = 0;
+let lastMediaAt = 0;
 let stalledChecks = 0;
+
+function mediaLooksLive() {
+  return Boolean(currentCall) && (Date.now() - lastMediaAt) < MEDIA_FRESH_MS;
+}
 // Which PeerConnection lastBytesReceived was measured on. bytesReceived is
 // per-connection and starts from zero, so comparing a new call's counter
 // against the previous call's total reads as a stall for as long as it takes
@@ -574,6 +607,7 @@ async function checkForStall() {
 
   if (sample.bytes > lastBytesReceived) {
     lastBytesReceived = sample.bytes;
+    lastMediaAt = Date.now();
     stalledChecks = 0;
     // Media is moving, so anything the watchdog put up should come down. It is
     // the only thing that can clear its own overlay: handleRemoteStream fires
@@ -631,7 +665,9 @@ window.addEventListener('online', () => {
 window.addEventListener('offline', () => {
   console.log('Network offline');
   updateStatus('Network offline');
-  showOfflineOverlay();
+  // navigator.onLine only reports whether an interface is up, not whether the
+  // far office is reachable, and it flaps on VPN and Wi-Fi handoffs.
+  showOfflineIfNoMedia('Network reported offline');
 });
 
 // Reconnect when tab becomes visible
