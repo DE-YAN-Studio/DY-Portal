@@ -190,6 +190,52 @@ async function fetchIceServers() {
 
 let connecting = false;
 
+// Both ends used to call each other and both answered, so every connection
+// produced two PeerConnections; `currentCall` kept only the newest and the
+// other was never closed. Each orphan holds its ICE sockets for the life of the
+// page, so on an always-on display they accumulate until the renderer cannot
+// allocate a UDP port at all - at which point ICE gathers no candidates, no
+// media flows, and signaling still looks perfectly healthy.
+//
+// One deterministic caller fixes the duplication: the lexicographically smaller
+// ID dials, the other only answers. Both ends agree without negotiating.
+const IS_CALLER = LOCAL_ID < REMOTE_ID;
+
+// Replacing a call must close the one it supersedes, or it leaks exactly as
+// before. Guarded against re-entry because close() fires the 'close' handler.
+function setCurrentCall(call) {
+  const previous = currentCall;
+  currentCall = call;
+
+  if (previous && previous !== call) {
+    console.log('Closing superseded call');
+    try {
+      previous.close();
+    } catch (err) {
+      console.error('Could not close superseded call:', err.message);
+    }
+  }
+}
+
+// A call that is no longer the active one closing is expected - it must not
+// drag the live connection down with it by triggering a reconnect.
+function handleCallClosed(call, reason) {
+  if (call !== currentCall) {
+    console.log(`Ignoring ${reason} on a stale call`);
+    return;
+  }
+
+  currentCall = null;
+  updateStatus(`${reason}, reconnecting...`);
+  showOfflineOverlay();
+  scheduleReconnect();
+}
+
+function isCallLive(call) {
+  return Boolean(call && call.peerConnection &&
+    !['closed', 'failed', 'disconnected'].includes(call.peerConnection.connectionState));
+}
+
 async function connectToPeerServer() {
   // Fetching the ICE config yields to the network. Without this guard a
   // reconnect firing during that window would build a second Peer on the same
@@ -215,10 +261,15 @@ async function connectToPeerServer() {
   connecting = false;
 
   peer.on('open', (id) => {
-    console.log('Connected to peer server with ID:', id);
-    updateStatus(`Connected as ${id}, calling remote...`);
-    connectData();
-    callRemote();
+    console.log(`Connected to peer server with ID: ${id} (role: ${IS_CALLER ? 'caller' : 'answerer'})`);
+    updateStatus(`Connected as ${id}`);
+    // Only the caller opens the data channel too, for the same reason.
+    if (IS_CALLER) {
+      connectData();
+      callRemote();
+    } else {
+      updateStatus(`Connected as ${id}, waiting for ${REMOTE_ID}`);
+    }
   });
 
   peer.on('connection', (conn) => {
@@ -235,20 +286,15 @@ async function connectToPeerServer() {
       handleRemoteStream(stream);
     });
 
-    call.on('close', () => {
-      updateStatus('Call closed, reconnecting...');
-      showOfflineOverlay();
-      scheduleReconnect();
-    });
+    call.on('close', () => handleCallClosed(call, 'Call closed'));
 
     call.on('error', (err) => {
       console.error('Call error:', err);
       updateStatus(`Call error: ${err.message}`);
-      showOfflineOverlay();
-      scheduleReconnect();
+      handleCallClosed(call, 'Call error');
     });
 
-    currentCall = call;
+    setCurrentCall(call);
   });
 
   peer.on('disconnected', () => {
@@ -295,6 +341,13 @@ function callRemote() {
     return;
   }
 
+  // Never dial over a call that is already carrying media - that is what
+  // produced the duplicate PeerConnections in the first place.
+  if (isCallLive(currentCall)) {
+    console.log('Call already live, not dialing again');
+    return;
+  }
+
   updateStatus(`Calling ${REMOTE_ID}...`);
 
   const call = peer.call(REMOTE_ID, localStream);
@@ -309,20 +362,15 @@ function callRemote() {
     handleRemoteStream(stream);
   });
 
-  call.on('close', () => {
-    updateStatus('Call ended, reconnecting...');
-    showOfflineOverlay();
-    scheduleReconnect();
-  });
+  call.on('close', () => handleCallClosed(call, 'Call ended'));
 
   call.on('error', (err) => {
     console.error('Outgoing call error:', err);
     updateStatus(`Call error: ${err.message}`);
-    showOfflineOverlay();
-    scheduleReconnect();
+    handleCallClosed(call, 'Call error');
   });
 
-  currentCall = call;
+  setCurrentCall(call);
 }
 
 function handleRemoteStream(stream) {
@@ -342,6 +390,8 @@ function handleRemoteStream(stream) {
 
   document.getElementById('offline-overlay').classList.add('hidden');
   resetReconnectAttempts();
+  lastBytesReceived = 0;
+  stalledChecks = 0;
   updateStatus('Connected');
 }
 
@@ -351,6 +401,15 @@ function showOfflineOverlay() {
 
 function connectData() {
   if (!peer || !REMOTE_ID) return;
+  if (dataConn && dataConn.open) return;
+
+  if (dataConn) {
+    try {
+      dataConn.close();
+    } catch (err) {
+      console.error('Could not close previous data connection:', err.message);
+    }
+  }
 
   const conn = peer.connect(REMOTE_ID);
   setupDataConnection(conn);
@@ -411,6 +470,12 @@ function reconnect() {
     console.log('Peer destroyed, creating new connection...');
     connectToPeerServer();
   } else if (peer && !peer.disconnected) {
+    // The answerer has nothing to retry here: dialing is the caller's job, and
+    // a redundant dial from this side is what created the second connection.
+    if (!IS_CALLER) {
+      console.log('Peer still connected, waiting for the caller');
+      return;
+    }
     console.log('Peer still connected, attempting call...');
     callRemote();
     connectData();
@@ -422,6 +487,72 @@ function reconnect() {
     connectToPeerServer();
   }
 }
+
+// Last night's failure was silent: the call stayed "Connected", the tracks were
+// live but muted, and nothing in the client noticed that no frames had arrived
+// for hours. On an unattended display nobody is there to spot a black screen, so
+// this watches for media actually moving rather than for an error.
+const STALL_CHECK_MS = 60000;
+const STALLED_CHECKS_BEFORE_RECONNECT = 3;
+const STALLED_CHECKS_BEFORE_RELOAD = 8;
+
+let lastBytesReceived = 0;
+let stalledChecks = 0;
+
+async function inboundBytes() {
+  if (!currentCall || !currentCall.peerConnection) return null;
+
+  try {
+    const stats = await currentCall.peerConnection.getStats();
+    let bytes = 0;
+    stats.forEach((report) => {
+      if (report.type === 'inbound-rtp') bytes += report.bytesReceived || 0;
+    });
+    return bytes;
+  } catch (err) {
+    console.error('Could not read call stats:', err.message);
+    return null;
+  }
+}
+
+async function checkForStall() {
+  const bytes = await inboundBytes();
+
+  // No call at all is the reconnect logic's business, not this watchdog's.
+  if (bytes === null) {
+    stalledChecks = 0;
+    return;
+  }
+
+  if (bytes > lastBytesReceived) {
+    lastBytesReceived = bytes;
+    stalledChecks = 0;
+    return;
+  }
+
+  stalledChecks++;
+  console.warn(`No media for ${stalledChecks} check(s) (${bytes} bytes total)`);
+  showOfflineOverlay();
+
+  // A full page reload is the only thing that reliably gives back ICE sockets
+  // the renderer has leaked, which is what took the portal down overnight.
+  if (stalledChecks >= STALLED_CHECKS_BEFORE_RELOAD) {
+    console.error('Media stalled too long - reloading the page');
+    window.location.reload();
+    return;
+  }
+
+  if (stalledChecks >= STALLED_CHECKS_BEFORE_RECONNECT) {
+    console.warn('Media stalled - tearing down the call and reconnecting');
+    setCurrentCall(null);
+    lastBytesReceived = 0;
+    if (peer && !peer.destroyed) peer.destroy();
+    peer = null;
+    connectToPeerServer();
+  }
+}
+
+setInterval(checkForStall, STALL_CHECK_MS);
 
 function resetReconnectAttempts() {
   reconnectAttempts = 0;
