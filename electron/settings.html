@@ -37,11 +37,16 @@
   #msg.err { color: #ff8080; }
   #msg.ok { color: #6cd08a; }
   code { color: #a9b2c0; font-size: 11px; word-break: break-all; }
+  .warn {
+    margin: -12px 0 18px; padding: 8px 10px; border-radius: 5px;
+    background: #3a2a12; border: 1px solid #6b4a18; color: #ffcf8f; font-size: 12px;
+  }
 </style>
 </head>
 <body>
   <h1>Portal Settings</h1>
   <p class="sub">Saved to <code id="path">…</code></p>
+  <p id="envWarn" class="warn" hidden></p>
 
   <label for="portalUrl">Server URL</label>
   <input id="portalUrl" type="text" spellcheck="false" placeholder="https://dy-portal.onrender.com">
@@ -63,6 +68,11 @@
   <div class="check">
     <input id="kiosk" type="checkbox">
     <label for="kiosk">Kiosk mode <span class="hint">— blocks app switching and exiting fullscreen</span></label>
+  </div>
+
+  <div class="check">
+    <input id="launchAtLogin" type="checkbox">
+    <label for="launchAtLogin">Launch at login <span class="hint" id="launchHint"></span></label>
   </div>
 
   <footer>
@@ -87,9 +97,27 @@
     $('localOffice').value = cfg.localOffice || '';
     $('remoteOffice').value = cfg.remoteOffice || '';
     $('kiosk').checked = !!cfg.kiosk;
+    $('launchAtLogin').checked = !!cfg.launchAtLogin;
+    // Honest about what this does and does not cover: a login item starts the
+    // app at login, but nothing relaunches it if the process dies. The
+    // LaunchAgent in scripts/ does both - see docs/MAC_SETUP.md.
+    $('launchHint').textContent = cfg.isPackaged
+      ? '— starts at login; does not relaunch after a crash'
+      : '— unavailable in development (would register Electron itself)';
+    $('launchAtLogin').disabled = !cfg.isPackaged;
     // The stored password is deliberately never sent to this window - only
     // whether one exists. Blank means "keep what is already saved".
     $('pwHint').textContent = cfg.hasPassword ? '— already set' : '— not set yet';
+
+    // Env vars win over this file, so saying so beats letting someone save a
+    // value that never takes effect and wonder why the display ignored them.
+    if (cfg.envOverrides && cfg.envOverrides.length) {
+      const warn = $('envWarn');
+      warn.textContent =
+        `Set by environment variable, which overrides anything saved here: ${cfg.envOverrides.join(', ')}. ` +
+        'Unset them for these settings to take effect.';
+      warn.hidden = false;
+    }
     $('portalUrl').focus();
   })();
 
@@ -102,7 +130,8 @@
       password: $('password').value,
       localOffice: $('localOffice').value.trim(),
       remoteOffice: $('remoteOffice').value.trim(),
-      kiosk: $('kiosk').checked
+      kiosk: $('kiosk').checked,
+      launchAtLogin: $('launchAtLogin').checked
     });
 
     $('save').disabled = false;

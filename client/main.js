@@ -559,8 +559,17 @@ async function checkForStall() {
   // A full page reload is the only thing that reliably gives back ICE sockets
   // the renderer has leaked, which is what took the portal down overnight.
   if (stalledChecks >= STALLED_CHECKS_BEFORE_RELOAD) {
-    console.error('Media stalled too long - reloading the page');
-    window.location.reload();
+    // Prefer the desktop app's reload: it re-authenticates first, so a session
+    // that expired while the app was running does not leave the display parked
+    // on a login page. A plain location.reload() cannot do that, and on a
+    // keyboard-less display nobody is there to notice or fix it.
+    if (window.portal && window.portal.reloadPortal) {
+      console.error('Media stalled too long - asking the app to re-authenticate and reload');
+      window.portal.reloadPortal();
+    } else {
+      console.error('Media stalled too long - reloading the page');
+      window.location.reload();
+    }
     return;
   }
 

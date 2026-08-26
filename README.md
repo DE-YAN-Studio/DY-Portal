@@ -209,6 +209,19 @@ It is deliberately undiscoverable: no menu item, no on-screen control, and the
 same three-modifier chord as quit, so a display in a shared space does not
 present a password field to anyone who brushes the keyboard.
 
+It also carries a **Launch at login** checkbox, which registers the app with
+macOS directly — no plist to hand-install. Note what it does and does not cover:
+it starts the portal when the user logs in, but nothing relaunches the app if
+the process dies. For that you still want the LaunchAgent in `scripts/`, whose
+`KeepAlive` restarts it on an abnormal exit (see
+[Launch at Login](#launch-at-login-unattended-displays)). The checkbox is
+disabled in development, where it would register the Electron binary rather
+than the portal.
+
+If any `PORTAL_*` environment variable is set, the window says so and names it:
+env vars outrank the config file, so a value typed here would otherwise be
+saved and silently ignored.
+
 Two things it enforces that hand-editing does not:
 
 - **Local and remote office must differ.** Two displays claiming the same ID is
@@ -284,6 +297,11 @@ is no title bar to close it with. These are the way out:
 | `Cmd/Ctrl+Shift+R` | Reload the portal |
 | `Cmd/Ctrl+Shift+I` | Toggle DevTools |
 | `Cmd+Ctrl+Shift+S` / `Ctrl+Shift+S` | Open Settings (macOS / Windows) |
+
+Reload and DevTools take two modifiers; quit and settings take three, so a
+stray keypress on a shared display cannot kill the portal or open its password
+field. `Cmd/Ctrl+Shift+R` is stronger than a browser refresh: it re-authenticates
+before reloading, so it also recovers a display whose session has expired.
 
 Quit takes Control as well on macOS: `Cmd+Shift+Q` is the Apple menu's **Log
 Out** shortcut, and macOS claims it before the window sees it, so a quit bound

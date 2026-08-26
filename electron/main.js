@@ -317,6 +317,17 @@ ipcMain.handle('toggle-fullscreen', () => {
   return goFullscreen;
 });
 
+// The renderer's stall watchdog escalates to this rather than reloading itself.
+// loadPortal re-runs the login first, so a session that expired while the app
+// was up - SESSION_MAX_AGE is days, an always-on display runs for longer -
+// recovers instead of parking on a login page nobody is there to fill in.
+ipcMain.handle('reload-portal', async () => {
+  console.log('Renderer asked for a re-authenticated reload');
+  retryAttempts = 0;
+  await loadPortal();
+  return true;
+});
+
 // The settings window is the supported way to point a display at a server and
 // tell it which office it is. Before this existed the config had to be hand
 // written into userData, and getting the path wrong was silent: the app fell
@@ -330,7 +341,7 @@ function openSettings() {
 
   settingsWindow = new BrowserWindow({
     width: 520,
-    height: 560,
+    height: 620,
     title: 'Portal Settings',
     backgroundColor: '#16181d',
     // The portal window may be kiosk or fullscreen, which would otherwise sit
@@ -347,12 +358,41 @@ function openSettings() {
   settingsWindow.on('closed', () => { settingsWindow = null; });
 }
 
+// Launch at login is an OS setting, not portal config - it deliberately does
+// not live in portal.config.json, because the file is copied between machines
+// and whether *this* Mac starts the portal is a property of the Mac.
+function launchAtLogin() {
+  try {
+    return app.getLoginItemSettings().openAtLogin;
+  } catch (err) {
+    console.error('Could not read login item settings:', err.message);
+    return false;
+  }
+}
+
+// Environment variables outrank the config file, so a value typed here can be
+// silently overridden and the window would look broken. Report which keys are
+// shadowed rather than letting someone chase it.
+function envOverrides() {
+  const map = {
+    portalUrl: 'PORTAL_URL',
+    password: 'PORTAL_PASSWORD',
+    localOffice: 'PORTAL_LOCAL_OFFICE',
+    remoteOffice: 'PORTAL_REMOTE_OFFICE',
+    kiosk: 'PORTAL_KIOSK'
+  };
+  return Object.values(map).filter((name) => process.env[name]);
+}
+
 ipcMain.handle('settings:load', () => ({
   configPath: configFilePath(),
+  envOverrides: envOverrides(),
   portalUrl: config.portalUrl,
   localOffice: config.localOffice,
   remoteOffice: config.remoteOffice,
   kiosk: config.kiosk,
+  launchAtLogin: launchAtLogin(),
+  isPackaged: app.isPackaged,
   // Whether a password exists, never the password itself.
   hasPassword: Boolean(config.password)
 }));
@@ -408,6 +448,15 @@ ipcMain.handle('settings:save', async (event, values) => {
   }
 
   console.log(`Settings saved to ${file}`);
+
+  // Applied separately from the config file, and reported rather than fatal: a
+  // failure here should not lose the settings the operator just typed in.
+  try {
+    app.setLoginItemSettings({ openAtLogin: Boolean(values.launchAtLogin) });
+    console.log(`Launch at login -> ${Boolean(values.launchAtLogin)}`);
+  } catch (err) {
+    console.error('Could not set launch at login:', err.message);
+  }
 
   config = loadConfig();
   console.log(`Portal: ${config.portalUrl} as ${config.localOffice} -> ${config.remoteOffice}`);
