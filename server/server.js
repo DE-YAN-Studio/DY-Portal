@@ -125,7 +125,16 @@ function iceServers() {
   return servers;
 }
 
-app.get('/api/ice', requireAuth, (req, res) => {
+// Deliberately not requireAuth: that redirects to /login, which for a fetch()
+// arrives as a 200 carrying HTML. The client then fails on the JSON parse and
+// silently degrades to STUN-only, losing the relay with no clear reason why.
+// An API endpoint should say no in a way a caller can detect.
+function requireAuthApi(req, res, next) {
+  if (verifySession(req.cookies.session)) return next();
+  res.status(401).json({ error: 'not authenticated' });
+}
+
+app.get('/api/ice', requireAuthApi, (req, res) => {
   res.json({ iceServers: iceServers() });
 });
 

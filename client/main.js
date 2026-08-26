@@ -173,8 +173,23 @@ window.continueWithoutCamera = function() {
 // TURN credentials stay in one place and can rotate without touching a display.
 async function fetchIceServers() {
   try {
-    const response = await fetch('/api/ice', { credentials: 'same-origin' });
+    // `redirect: 'error'` rather than the default 'follow'. /api/ice sits behind
+    // requireAuth, which redirects to /login rather than returning 401, so a
+    // followed redirect arrives as a 200 carrying the login page - response.ok
+    // is true, and the failure only surfaces as a JSON parse error blamed on
+    // the wrong thing. An expired session would quietly cost the portal its
+    // relay, which is the exact shape of outage this endpoint exists to prevent.
+    const response = await fetch('/api/ice', {
+      credentials: 'same-origin',
+      redirect: 'error'
+    });
+
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const type = response.headers.get('content-type') || '';
+    if (!type.includes('application/json')) {
+      throw new Error(`expected JSON, got ${type || 'no content-type'}`);
+    }
 
     const body = await response.json();
     if (!Array.isArray(body.iceServers) || body.iceServers.length === 0) {
@@ -183,7 +198,14 @@ async function fetchIceServers() {
 
     return body.iceServers;
   } catch (err) {
-    console.error(`Could not fetch ICE servers (${err.message}) - falling back to STUN only`);
+    // Loud on purpose. The fallback is STUN-only, which cannot carry this
+    // portal - the two offices have no direct path - so this line is the
+    // difference between a five-minute diagnosis and a long one.
+    console.error(
+      `Could not fetch ICE servers: ${err.message}. ` +
+      'Falling back to STUN only - if the offices need a relay there will be NO VIDEO. ' +
+      'A redirect or non-JSON response here means the session is not authenticated.'
+    );
     return config.ICE_SERVERS_FALLBACK;
   }
 }
