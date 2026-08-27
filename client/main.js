@@ -321,7 +321,7 @@ async function connectToPeerServer() {
 
   peer.on('disconnected', () => {
     console.log('Disconnected from peer server, attempting reconnect...');
-    updateStatus('Disconnected, reconnecting...');
+    setSignalingStatus('Disconnected, reconnecting...');
     showOfflineIfNoMedia('Signaling disconnected');
     setTimeout(() => {
       if (peer && !peer.destroyed) {
@@ -334,7 +334,7 @@ async function connectToPeerServer() {
 
   peer.on('error', (err) => {
     console.error('Peer error:', err);
-    updateStatus(`Error: ${err.type}`);
+    setSignalingStatus(`Error: ${err.type}`);
     showOfflineIfNoMedia(`Peer error ${err.type}`);
 
     if (err.type === 'unavailable-id') {
@@ -351,7 +351,7 @@ async function connectToPeerServer() {
 
   peer.on('close', () => {
     console.log('Peer connection closed');
-    updateStatus('Connection closed');
+    setSignalingStatus('Connection closed');
     showOfflineIfNoMedia('Signaling closed');
     scheduleReconnect();
   });
@@ -437,6 +437,19 @@ function hideOfflineOverlay() {
 // worse than saying nothing - a display that cries offline while working is one
 // nobody trusts when it is actually offline. A genuine media stall is caught by
 // the watchdog within two checks.
+// Same rule as the overlay, applied to the status label. A label reading
+// "Disconnected" over a healthy picture is the same lie in smaller type, and
+// these messages all describe the signaling connection, which the far office's
+// video does not depend on once a call is up. The detail still goes to the
+// console, where it is useful and harmless.
+function setSignalingStatus(text) {
+  if (mediaLooksLive()) {
+    updateStatus('Connected');
+    return;
+  }
+  updateStatus(text);
+}
+
 function showOfflineIfNoMedia(reason) {
   // Deliberately not isCallLive(): that treats ICE 'disconnected' as dead, but
   // it is a transient warning state - a dropped signaling socket pushes the
@@ -504,7 +517,7 @@ function scheduleReconnect() {
   reconnectAttempts++;
   const delay = Math.min(BASE_RECONNECT_DELAY * Math.pow(1.5, reconnectAttempts - 1), MAX_RECONNECT_DELAY);
 
-  updateStatus(`Reconnecting in ${Math.round(delay/1000)}s...`);
+  setSignalingStatus(`Reconnecting in ${Math.round(delay/1000)}s...`);
 
   reconnectTimeout = setTimeout(() => {
     reconnect();
@@ -513,7 +526,7 @@ function scheduleReconnect() {
 
 function reconnect() {
   if (!navigator.onLine) {
-    updateStatus('Offline, waiting for network...');
+    setSignalingStatus('Offline, waiting for network...');
     return;
   }
 
@@ -576,15 +589,77 @@ async function inboundBytes() {
 
   try {
     const stats = await pc.getStats();
+    const byId = {};
+    stats.forEach((report) => { byId[report.id] = report; });
+
     let bytes = 0;
+    const quality = { at: Date.now() };
+
     stats.forEach((report) => {
-      if (report.type === 'inbound-rtp') bytes += report.bytesReceived || 0;
+      if (report.type === 'inbound-rtp') {
+        bytes += report.bytesReceived || 0;
+
+        if (report.kind === 'video') {
+          quality.width = report.frameWidth;
+          quality.height = report.frameHeight;
+          quality.fps = report.framesPerSecond;
+          quality.videoBytes = report.bytesReceived || 0;
+          quality.packetsLost = report.packetsLost || 0;
+          quality.packetsReceived = report.packetsReceived || 0;
+          // Anything the far end had to drop and resend, or the decoder had to
+          // conceal, shows up here before it shows up as a visibly worse image.
+          quality.nacks = report.nackCount;
+          quality.freezeCount = report.freezeCount;
+        }
+      }
+
+      if (report.type === 'candidate-pair' && (report.nominated || report.state === 'succeeded')) {
+        quality.rttMs = report.currentRoundTripTime !== undefined
+          ? Math.round(report.currentRoundTripTime * 1000)
+          : undefined;
+        const local = byId[report.localCandidateId];
+        const remote = byId[report.remoteCandidateId];
+        quality.path = `${local && local.candidateType}->${remote && remote.candidateType}`;
+      }
     });
-    return { pc, bytes };
+
+    return { pc, bytes, quality };
   } catch (err) {
     console.error('Could not read call stats:', err.message);
     return null;
   }
+}
+
+// Logged once a minute so a display's own log answers "is the picture getting
+// worse, and is it the network?" without anyone having to be standing there
+// when it happens. Resolution and bitrate say what the far end is sending;
+// loss, nacks and freezes say whether the path is struggling to carry it.
+let lastQuality = null;
+
+function logQuality(quality) {
+  if (!quality || quality.videoBytes === undefined) return;
+
+  let bitrate = '?';
+  if (lastQuality && quality.at > lastQuality.at) {
+    const seconds = (quality.at - lastQuality.at) / 1000;
+    const delta = quality.videoBytes - lastQuality.videoBytes;
+    if (delta >= 0) bitrate = Math.round((delta * 8) / seconds / 1000);
+  }
+
+  let lossPct = '?';
+  if (lastQuality) {
+    const lost = quality.packetsLost - lastQuality.packetsLost;
+    const got = quality.packetsReceived - lastQuality.packetsReceived;
+    if (got + lost > 0) lossPct = ((lost / (got + lost)) * 100).toFixed(2);
+  }
+
+  console.log(
+    `media: ${quality.width || '?'}x${quality.height || '?'} @${quality.fps || '?'}fps ` +
+    `${bitrate}kbps loss ${lossPct}% rtt ${quality.rttMs === undefined ? '?' : quality.rttMs}ms ` +
+    `nacks ${quality.nacks || 0} freezes ${quality.freezeCount || 0} via ${quality.path || '?'}`
+  );
+
+  lastQuality = quality;
 }
 
 async function checkForStall() {
@@ -596,10 +671,13 @@ async function checkForStall() {
     return;
   }
 
+  logQuality(sample.quality);
+
   // A different connection than last time: rebaseline rather than compare
   // across them. Not a stall, and not evidence of health either.
   if (sample.pc !== measuredConnection) {
     measuredConnection = sample.pc;
+    lastQuality = null;
     lastBytesReceived = sample.bytes;
     stalledChecks = 0;
     return;
@@ -664,7 +742,7 @@ window.addEventListener('online', () => {
 
 window.addEventListener('offline', () => {
   console.log('Network offline');
-  updateStatus('Network offline');
+  setSignalingStatus('Network offline');
   // navigator.onLine only reports whether an interface is up, not whether the
   // far office is reachable, and it flaps on VPN and Wi-Fi handoffs.
   showOfflineIfNoMedia('Network reported offline');
