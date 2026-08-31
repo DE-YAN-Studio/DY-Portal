@@ -637,6 +637,17 @@ async function inboundBytes() {
 let lastQuality = null;
 
 function logQuality(quality) {
+  try {
+    logQualityLine(quality);
+  } catch (err) {
+    // Logging must never be able to take the watchdog down with it. A throw
+    // here would reject checkForStall before it evaluates the stall, so an
+    // unattended display would lose its recovery path to a formatting bug.
+    console.error('Could not log media quality:', err.message);
+  }
+}
+
+function logQualityLine(quality) {
   if (!quality || quality.videoBytes === undefined) return;
 
   let bitrate = '?';
